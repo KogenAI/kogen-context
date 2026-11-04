@@ -1,0 +1,10 @@
+{
+  "name": "row-report",
+  "version": "1.0.0",
+  "description": "A tiny report formatter",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "license": "Apache-2.0"
+}

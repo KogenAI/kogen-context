@@ -1,0 +1,11 @@
+[project]
+name = "row-report"
+version = "1.0.0"
+description = "A tiny report formatter"
+requires-python = ">=3.10"
+
+[project.scripts]
+row-report = "app.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

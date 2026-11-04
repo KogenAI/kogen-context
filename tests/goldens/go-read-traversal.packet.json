@@ -1,0 +1,1 @@
+{"version":1,"error":{"code":"path_outside_root","message":"path escapes the checkout root: ../outside/secret.txt"}}

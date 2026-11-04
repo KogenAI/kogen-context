@@ -10,7 +10,9 @@ The repo contains the Cargo scaffold and Kogen setup, the `search` and `read` co
 
 - [`src/`](src/): Rust source for the CLI
 - [`contract/`](contract/): the version 1 request and packet schemas, examples and fixture checkout
-- [`tests/`](tests/): Rust integration tests, including the contract test
+- [`tests/`](tests/): Rust integration tests, including the contract test and the golden packet test
+- [`tests/corpus/`](tests/corpus/): the fixture corpus, a Go, a JS/TS and a Python checkout with binary, oversized and escaping symlinked paths
+- [`tests/goldens/`](tests/goldens/): the golden requests and packets of `kogen-context request` over the corpus
 - [`.kogen/project.yaml`](.kogen/project.yaml): Kogen project configuration
 - [`features/steps/README.md`](features/steps/README.md): feature steps notes
 - [`rust-toolchain.toml`](rust-toolchain.toml): pinned Rust toolchain
@@ -24,6 +26,12 @@ cargo fmt --all --check
 cargo clippy --locked --offline --all-targets -- -D warnings
 cargo test --locked --offline
 cargo build --locked --offline
+```
+
+`tests/corpus.rs` runs `kogen-context request` on every golden request, compares its output to the golden packet byte for byte and checks that the corpus is unchanged. To rewrite the golden packets after an intended output change, run:
+
+```sh
+KOGEN_CONTEXT_UPDATE_GOLDENS=1 cargo test --locked --offline --test corpus
 ```
 
 ## License
