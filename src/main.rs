@@ -37,6 +37,10 @@ fn main() -> ExitCode {
     if args.len() == 1 && args[0] == "request" {
         return request::serve_stdin();
     }
+    if args.len() == 1 && args[0] == "version" {
+        println!("{}", version_line());
+        return ExitCode::SUCCESS;
+    }
     match run(&args) {
         Ok(output) => {
             println!("{output}");
@@ -50,6 +54,20 @@ fn main() -> ExitCode {
             );
             ExitCode::from(refusal.exit_status())
         }
+    }
+}
+
+/// The `version` line: the release tag and commit when both were set at compile time.
+fn version_line() -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    match (
+        option_env!("KOGEN_CONTEXT_RELEASE_TAG"),
+        option_env!("KOGEN_CONTEXT_RELEASE_COMMIT"),
+    ) {
+        (Some(tag), Some(commit)) if !tag.is_empty() && !commit.is_empty() => {
+            format!("kogen-context {version} (tag {tag}, commit {commit})")
+        }
+        _ => format!("kogen-context {version} (development build)"),
     }
 }
 

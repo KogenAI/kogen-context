@@ -1,6 +1,7 @@
 //! Runs the binary on every golden request of `tests/goldens/` against the
 //! fixture corpus of `tests/corpus/`, compares its stdout to the golden packet
-//! byte for byte and checks that no run changes the corpus. With
+//! byte for byte and checks that no run changes the corpus. It runs the binary
+//! that `KOGEN_CONTEXT_BIN` names, or else the binary Cargo built. With
 //! `KOGEN_CONTEXT_UPDATE_GOLDENS=1` it writes the packets instead.
 
 use std::collections::BTreeMap;
@@ -11,6 +12,7 @@ use std::process::{Command, Stdio};
 use std::time::SystemTime;
 
 const UPDATE_VARIABLE: &str = "KOGEN_CONTEXT_UPDATE_GOLDENS";
+const BINARY_VARIABLE: &str = "KOGEN_CONTEXT_BIN";
 const CORPUS: &str = "tests/corpus";
 const GOLDENS: &str = "tests/goldens";
 const ERROR_PREFIX: &str = "{\"version\":1,\"error\":{\"code\":\"";
@@ -110,14 +112,17 @@ fn expected_status(stdout: &str) -> i32 {
 }
 
 fn run_request(root: &Path, request: &[u8]) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_kogen-context"))
+    let binary = std::env::var_os(BINARY_VARIABLE)
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_kogen-context").into());
+    let mut child = Command::new(&binary)
         .arg("request")
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("cannot start kogen-context");
+        .unwrap_or_else(|e| panic!("cannot start {}: {e}", Path::new(&binary).display()));
     child
         .stdin
         .take()

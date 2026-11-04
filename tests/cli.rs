@@ -126,3 +126,22 @@ fn read_returns_bounded_range_and_refuses_bad_requests() {
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty());
 }
+
+#[test]
+fn version_prints_one_line_and_takes_no_argument() {
+    let out = run(&["version"]);
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "kogen-context {} (development build)\n",
+            env!("CARGO_PKG_VERSION")
+        )
+    );
+    let out = run(&["version", "extra"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        "{\"error\":{\"code\":\"usage\",\"message\":\"usage: kogen-context search ROOT LITERAL or kogen-context read ROOT PATH START END\"}}\n"
+    );
+}
