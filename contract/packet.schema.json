@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kogen.dev/schemas/kogen-context/1/packet.schema.json",
+  "title": "kogen-context packet, version 1",
+  "description": "The one JSON packet that `kogen-context request` writes to standard output.",
+  "oneOf": [{"$ref": "#/$defs/search"}, {"$ref": "#/$defs/read"}, {"$ref": "#/$defs/error"}],
+  "$defs": {
+    "search": {
+      "type": "object",
+      "properties": {
+        "version": {"const": 1},
+        "operation": {"const": "search"},
+        "query": {"type": "string", "minLength": 1},
+        "matches": {"type": "array", "maxItems": 100, "items": {"$ref": "#/$defs/match"}},
+        "truncated": {
+          "description": "True exactly when more matching lines exist than max_matches.",
+          "type": "boolean"
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_matches": {"type": "integer", "minimum": 1, "maximum": 100},
+            "max_line_chars": {"$ref": "#/$defs/max_line_chars"}
+          },
+          "required": ["max_matches", "max_line_chars"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["version", "operation", "query", "matches", "truncated", "limits"],
+      "additionalProperties": false
+    },
+    "match": {
+      "type": "object",
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "line": {"$ref": "#/$defs/line_number"},
+        "column": {
+          "description": "1-based character position of the first occurrence of the literal in the full line.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "text": {"$ref": "#/$defs/text"}
+      },
+      "required": ["path", "line", "column", "text"],
+      "additionalProperties": false
+    },
+    "read": {
+      "type": "object",
+      "properties": {
+        "version": {"const": 1},
+        "operation": {"const": "read"},
+        "path": {"$ref": "#/$defs/path"},
+        "start": {"$ref": "#/$defs/line_number"},
+        "end": {"$ref": "#/$defs/line_number"},
+        "total_lines": {"type": "integer", "minimum": 1},
+        "lines": {"type": "array", "maxItems": 200, "items": {"$ref": "#/$defs/line"}},
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_lines": {"type": "integer", "minimum": 1, "maximum": 200},
+            "max_line_chars": {"$ref": "#/$defs/max_line_chars"}
+          },
+          "required": ["max_lines", "max_line_chars"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["version", "operation", "path", "start", "end", "total_lines", "lines", "limits"],
+      "additionalProperties": false
+    },
+    "line": {
+      "type": "object",
+      "properties": {
+        "line": {"$ref": "#/$defs/line_number"},
+        "text": {"$ref": "#/$defs/text"}
+      },
+      "required": ["line", "text"],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "version": {"const": 1},
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "enum": [
+                "invalid_request",
+                "unsupported_version",
+                "invalid_range",
+                "root_not_directory",
+                "path_outside_root",
+                "not_found",
+                "not_a_file",
+                "not_text"
+              ]
+            },
+            "message": {"type": "string", "minLength": 1}
+          },
+          "required": ["code", "message"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["version", "error"],
+      "additionalProperties": false
+    },
+    "path": {
+      "description": "Path relative to the canonicalized checkout root, separated by `/`, never starting with `./`.",
+      "type": "string",
+      "minLength": 1
+    },
+    "line_number": {"description": "A 1-based line number.", "type": "integer", "minimum": 1},
+    "text": {
+      "description": "The first max_line_chars characters of the line, without its line ending.",
+      "type": "string",
+      "maxLength": 500
+    },
+    "max_line_chars": {"type": "integer", "minimum": 1, "maximum": 500}
+  }
+}

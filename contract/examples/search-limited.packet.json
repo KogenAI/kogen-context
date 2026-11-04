@@ -1,0 +1,1 @@
+{"version":1,"operation":"search","query":"parse_config","matches":[{"path":"README.md","line":3,"column":6,"text":"Call parse_c"},{"path":"app.py","line":1,"column":18,"text":"from util im"}],"truncated":true,"limits":{"max_matches":2,"max_line_chars":12}}

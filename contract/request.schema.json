@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kogen.dev/schemas/kogen-context/1/request.schema.json",
+  "title": "kogen-context request, version 1",
+  "description": "The JSON request that `kogen-context request` reads from standard input.",
+  "oneOf": [{"$ref": "#/$defs/search"}, {"$ref": "#/$defs/read"}],
+  "$defs": {
+    "search": {
+      "description": "Find an exact, case-sensitive literal in the searchable files under the checkout root.",
+      "type": "object",
+      "properties": {
+        "version": {"const": 1},
+        "root": {"$ref": "#/$defs/root"},
+        "operation": {"const": "search"},
+        "literal": {"type": "string", "minLength": 1},
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_matches": {"type": "integer", "minimum": 1, "maximum": 100},
+            "max_line_chars": {"$ref": "#/$defs/max_line_chars"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["version", "root", "operation", "literal"],
+      "additionalProperties": false
+    },
+    "read": {
+      "description": "Read the inclusive line range from start to end of one file inside the checkout root.",
+      "type": "object",
+      "properties": {
+        "version": {"const": 1},
+        "root": {"$ref": "#/$defs/root"},
+        "operation": {"const": "read"},
+        "path": {"type": "string", "minLength": 1},
+        "start": {"$ref": "#/$defs/line_number"},
+        "end": {"$ref": "#/$defs/line_number"},
+        "limits": {
+          "type": "object",
+          "properties": {
+            "max_lines": {"type": "integer", "minimum": 1, "maximum": 200},
+            "max_line_chars": {"$ref": "#/$defs/max_line_chars"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["version", "root", "operation", "path", "start", "end"],
+      "additionalProperties": false
+    },
+    "root": {
+      "description": "The checkout root, absolute or relative to the working directory of the process.",
+      "type": "string",
+      "minLength": 1
+    },
+    "line_number": {"description": "A 1-based line number.", "type": "integer", "minimum": 1},
+    "max_line_chars": {
+      "description": "At most this many characters of each line's text are returned.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 500
+    }
+  }
+}

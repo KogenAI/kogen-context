@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "root": "contract/examples/checkout",
+  "operation": "search",
+  "literal": "parse_config",
+  "limits": {"max_matches": 2, "max_line_chars": 12}
+}

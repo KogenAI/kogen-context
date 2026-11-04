@@ -1,0 +1,1 @@
+{"version":1,"operation":"read","path":"util.py","start":1,"end":2,"total_lines":2,"lines":[{"line":1,"text":"def parse_config(path):"},{"line":2,"text":"    return open(path).read()"}],"limits":{"max_lines":200,"max_line_chars":500}}

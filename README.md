@@ -4,11 +4,13 @@ Kogen Context is a standalone Rust CLI in development for finding relevant sourc
 
 ## Current state
 
-The repo currently contains the Cargo scaffold and Kogen setup. `.kogen/project.yaml` configures Claude Code: Sonnet 5.5 medium for Shape and Build, Opus 5.5 medium for Review.
+The repo contains the Cargo scaffold and Kogen setup, the `search` and `read` commands, and `kogen-context request`, which reads one version 1 JSON request on standard input and writes one version 1 JSON packet on standard output. [`contract/`](contract/) publishes its schemas and examples. `.kogen/project.yaml` configures Claude Code: Sonnet 5.5 medium for Shape and Build, Opus 5.5 medium for Review.
 
 ## Source map
 
 - [`src/`](src/): Rust source for the CLI
+- [`contract/`](contract/): the version 1 request and packet schemas, examples and fixture checkout
+- [`tests/`](tests/): Rust integration tests, including the contract test
 - [`.kogen/project.yaml`](.kogen/project.yaml): Kogen project configuration
 - [`features/steps/README.md`](features/steps/README.md): feature steps notes
 - [`rust-toolchain.toml`](rust-toolchain.toml): pinned Rust toolchain

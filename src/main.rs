@@ -1,5 +1,8 @@
 //! `kogen-context`: exact literal search and bounded reads inside one checkout.
 
+mod json;
+mod request;
+
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
@@ -10,6 +13,7 @@ const MAX_MATCHES: usize = 100;
 const MAX_READ_LINES: u128 = 200;
 const MAX_TEXT_CHARS: usize = 500;
 
+#[derive(Debug)]
 struct Refusal {
     code: &'static str,
     message: String,
@@ -30,6 +34,9 @@ impl Refusal {
 
 fn main() -> ExitCode {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if args.len() == 1 && args[0] == "request" {
+        return request::serve_stdin();
+    }
     match run(&args) {
         Ok(output) => {
             println!("{output}");
@@ -102,9 +109,9 @@ fn split_lines(content: &str) -> Vec<&str> {
         .collect()
 }
 
-/// The first 500 characters of a line.
-fn clip(line: &str) -> &str {
-    match line.char_indices().nth(MAX_TEXT_CHARS) {
+/// The first `max_chars` characters of a line.
+fn clip(line: &str, max_chars: usize) -> &str {
+    match line.char_indices().nth(max_chars) {
         Some((end, _)) => &line[..end],
         None => line,
     }
@@ -169,7 +176,14 @@ fn collect_files(root: &Path) -> Vec<String> {
     files
 }
 
-fn search(root: &Path, literal: &str) -> Result<String, Refusal> {
+/// The first `max_matches` matching lines as JSON objects, and whether more
+/// matching lines exist.
+fn find_matches(
+    root: &Path,
+    literal: &str,
+    max_matches: usize,
+    max_chars: usize,
+) -> Result<(Vec<String>, bool), Refusal> {
     let root = checkout_root(root)?;
     let mut matches = Vec::new();
     let mut truncated = false;
@@ -184,7 +198,7 @@ fn search(root: &Path, literal: &str) -> Result<String, Refusal> {
             let Some(column) = column_of(line, literal) else {
                 continue;
             };
-            if matches.len() == MAX_MATCHES {
+            if matches.len() == max_matches {
                 truncated = true;
                 break 'files;
             }
@@ -193,10 +207,15 @@ fn search(root: &Path, literal: &str) -> Result<String, Refusal> {
                 json_string(&rel),
                 index + 1,
                 column,
-                json_string(clip(line))
+                json_string(clip(line, max_chars))
             ));
         }
     }
+    Ok((matches, truncated))
+}
+
+fn search(root: &Path, literal: &str) -> Result<String, Refusal> {
+    let (matches, truncated) = find_matches(root, literal, MAX_MATCHES, MAX_TEXT_CHARS)?;
     Ok(format!(
         "{{\"query\":{},\"matches\":[{}],\"truncated\":{}}}",
         json_string(literal),
@@ -221,19 +240,25 @@ fn validate_range(start: &str, end: &str) -> Result<(u128, u128), Refusal> {
             "start and end must be positive integers",
         ));
     };
-    if start_n > end_n {
-        return Err(Refusal::new(
-            "invalid_range",
-            format!("start line {start_n} is after end line {end_n}"),
-        ));
-    }
-    if end_n - start_n >= MAX_READ_LINES {
-        return Err(Refusal::new(
-            "invalid_range",
-            format!("line range {start_n}-{end_n} exceeds the 200-line read limit"),
-        ));
-    }
+    check_range(start_n, end_n, MAX_READ_LINES)?;
     Ok((start_n, end_n))
+}
+
+/// The range must be ordered and span at most `max_lines` lines.
+fn check_range(start: u128, end: u128, max_lines: u128) -> Result<(), Refusal> {
+    if start > end {
+        return Err(Refusal::new(
+            "invalid_range",
+            format!("start line {start} is after end line {end}"),
+        ));
+    }
+    if end - start >= max_lines {
+        return Err(Refusal::new(
+            "invalid_range",
+            format!("line range {start}-{end} exceeds the {max_lines}-line read limit"),
+        ));
+    }
+    Ok(())
 }
 
 /// Whether `path` stays inside its root when resolved lexically.
@@ -258,8 +283,21 @@ fn escapes_lexically(path: &Path) -> bool {
     false
 }
 
-fn read(root: &Path, path: &str, start: &str, end: &str) -> Result<String, Refusal> {
-    let (start, end) = validate_range(start, end)?;
+/// The lines of a read, as JSON objects, and the file they come from.
+struct ReadLines {
+    path: String,
+    total: usize,
+    lines: Vec<String>,
+}
+
+/// A read whose range already passed `check_range`.
+fn read_lines(
+    root: &Path,
+    path: &str,
+    start: u128,
+    end: u128,
+    max_chars: usize,
+) -> Result<ReadLines, Refusal> {
     let root = checkout_root(root)?;
     let outside = || {
         Refusal::new(
@@ -301,17 +339,27 @@ fn read(root: &Path, path: &str, start: &str, end: &str) -> Result<String, Refus
             format!(
                 "{{\"line\":{},\"text\":{}}}",
                 number,
-                json_string(clip(lines[number - 1]))
+                json_string(clip(lines[number - 1], max_chars))
             )
         })
         .collect();
+    Ok(ReadLines {
+        path: relative_string(relative),
+        total,
+        lines: selected,
+    })
+}
+
+fn read(root: &Path, path: &str, start: &str, end: &str) -> Result<String, Refusal> {
+    let (start, end) = validate_range(start, end)?;
+    let read = read_lines(root, path, start, end, MAX_TEXT_CHARS)?;
     Ok(format!(
         "{{\"path\":{},\"start\":{},\"end\":{},\"total_lines\":{},\"lines\":[{}]}}",
-        json_string(&relative_string(relative)),
+        json_string(&read.path),
         start,
         end,
-        total,
-        selected.join(",")
+        read.total,
+        read.lines.join(",")
     ))
 }
 
@@ -335,9 +383,12 @@ mod tests {
     #[test]
     fn clips_to_500_characters() {
         let exact = "y".repeat(500);
-        assert_eq!(clip(&exact), exact);
+        assert_eq!(clip(&exact, MAX_TEXT_CHARS), exact);
         let wide = "é".repeat(501);
-        assert_eq!(clip(&wide), "é".repeat(500));
+        assert_eq!(clip(&wide, MAX_TEXT_CHARS), "é".repeat(500));
+        assert_eq!(clip("abcdef", 5), "abcde");
+        assert_eq!(clip("abcdef", 6), "abcdef");
+        assert_eq!(clip("abcdef", 1), "a");
     }
 
     #[test]
