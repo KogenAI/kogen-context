@@ -1,6 +1,6 @@
 # kogen-context contract
 
-This directory pins the contract that callers of `kogen-context` use. Callers run `kogen-context` as a separate, read-only process: `kogen-context request` reads one version 1 JSON request on standard input and writes one version 1 JSON packet on standard output. Each run is stateless: one request in, one packet out, nothing stored between runs.
+This directory pins the contract that callers of `kogen-context` use. Callers run `kogen-context` as a separate process that never writes to the checkout: `kogen-context request` reads one version 1 JSON request on standard input and writes one version 1 JSON packet on standard output. One request in, one packet out. The packet depends only on the request and the files under the root; a search may keep an index in the per-user cache directory (see [Search index](#search-index)), which changes speed only.
 
 ## Invocation
 
@@ -33,6 +33,18 @@ A search request may carry an optional `"order"` member, `"path"` or `"ranked"`;
 6. any line of any other file (docs, data, build files)
 
 Source files are told by extension; a generated file is under a `generated` directory or has `DO NOT EDIT` or `@generated` in its first five lines; a test file has `test`, `tests` or `spec` as a part of its name. The packet has the same members as before and no new one. This is an added optional field: version 1 requests without it behave exactly as before.
+
+## Search index
+
+A search of a root inside a Git checkout may keep an index of the checkout's HEAD commit in the per-user cache directory. The index changes speed only: the packet of a search is byte-identical with and without it, for the same request and the same files under the root, and the unversioned `search` command prints the same. Packets carry no index or freshness field, and nothing in the request changes.
+
+- Location: `$XDG_CACHE_HOME/kogen-context` when `XDG_CACHE_HOME` is an absolute path, else `~/Library/Caches/kogen-context` on macOS and `~/.cache/kogen-context` elsewhere (`~` is an absolute `HOME`). With neither, or when that directory is the root or inside it, the search uses no index and writes nothing.
+- Files: `index-v1/commits/<commit>` holds the regular-file blobs of the commit with their trigrams, shared by every checkout, root and run of the user. `index-v1/trees/<commit>-<root key>` records which files of one root still have the commit's bytes, by their `lstat`; `<root key>` is the FNV-1a 64-bit hash of the canonical root path as 16 lowercase hexadecimal digits.
+- The working tree's uncommitted state is overlaid on every search: edited, added, ignored and deleted files are seen in the next search without a rebuild, because a file is read unless the snapshot trusts it and the index shows that the literal cannot match in it.
+- The index is never inside the root, is safe for concurrent runs (files are published whole by a rename, nothing is locked), and may be deleted at any time; the next search rebuilds what it needs. The checkout, including its `.git`, is never written. A search outside a Git checkout, or without a usable cache directory, scans the files as before.
+- A cold search runs `git ls-tree`, `git cat-file` and, for refs that are not files, `git rev-parse`, all read-only. A warm search runs no other program.
+
+This is the expand step of expand-then-contract: no request or packet member is added or removed, version 1 and its schemas are unchanged, and nothing is contracted.
 
 ## Files
 

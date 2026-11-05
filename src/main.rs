@@ -1,5 +1,6 @@
 //! `kogen-context`: exact literal search and bounded reads inside one checkout.
 
+mod index;
 mod json;
 mod rank;
 mod request;
@@ -136,6 +137,43 @@ fn clip(line: &str, max_chars: usize) -> &str {
     }
 }
 
+/// The lines of `content` that contain `literal`, as their 1-based numbers
+/// and texts: exactly the lines of `split_lines(content)` for which
+/// `line.find(literal)` is `Some`. It jumps from one occurrence of the literal
+/// in the whole content to the next, so lines without one are never split.
+pub(crate) fn matching_lines<'a>(content: &'a str, literal: &str) -> Vec<(usize, &'a str)> {
+    let mut found = Vec::new();
+    let (mut pos, mut number) = (0, 0);
+    while pos < content.len() {
+        let Some(at) = content[pos..].find(literal).map(|i| pos + i) else {
+            break;
+        };
+        // The line that holds the occurrence starts after the last newline
+        // before it; the lines in between hold no occurrence.
+        let start = content[pos..at].rfind('\n').map_or(pos, |i| pos + i + 1);
+        number += content[pos..start].matches('\n').count() + 1;
+        let end = content[start..]
+            .find('\n')
+            .map_or(content.len(), |i| start + i + 1);
+        let line = split_lines(&content[start..end])[0];
+        if line.contains(literal) {
+            found.push((number, line));
+        }
+        pos = end;
+    }
+    found
+}
+
+/// The first `count` lines of `content`, as `split_lines` gives them.
+pub(crate) fn first_lines(content: &str, count: usize) -> Vec<&str> {
+    let end = content
+        .split_inclusive('\n')
+        .take(count)
+        .map(str::len)
+        .sum();
+    split_lines(&content[..end])
+}
+
 /// 1-based character column of the first occurrence of `literal` in `line`.
 fn column_of(line: &str, literal: &str) -> Option<usize> {
     line.find(literal)
@@ -162,8 +200,10 @@ fn relative_string(path: &Path) -> String {
         .join("/")
 }
 
-/// Repo-relative paths of every regular file that `search` considers.
-fn collect_files(root: &Path) -> Vec<String> {
+/// Every regular file under `root` that `search` considers, relative to
+/// `root`, in bytewise path order, with the `lstat` of its directory entry
+/// when `with_meta` is set.
+pub(crate) fn walk_files(root: &Path, with_meta: bool) -> Vec<(String, Option<fs::Metadata>)> {
     let mut files = Vec::new();
     let mut pending: Vec<(PathBuf, String)> = vec![(root.to_path_buf(), String::new())];
     while let Some((dir, prefix)) = pending.pop() {
@@ -187,12 +227,34 @@ fn collect_files(root: &Path) -> Vec<String> {
                     pending.push((entry.path(), rel));
                 }
             } else if kind.is_file() {
-                files.push(rel);
+                let meta = if with_meta {
+                    entry.metadata().ok()
+                } else {
+                    None
+                };
+                files.push((rel, meta));
             }
         }
     }
-    files.sort();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
     files
+}
+
+/// Repo-relative paths of every regular file that a search of `literal`
+/// under the canonical `root` must read: all of them, less the files that
+/// the index shows cannot match.
+pub(crate) fn files_to_search(root: &Path, literal: &str) -> Vec<String> {
+    match index::open(root, literal) {
+        Some(overlay) => walk_files(root, true)
+            .into_iter()
+            .filter(|(rel, meta)| !meta.as_ref().is_some_and(|m| overlay.skips(rel, m)))
+            .map(|(rel, _)| rel)
+            .collect(),
+        None => walk_files(root, false)
+            .into_iter()
+            .map(|(rel, _)| rel)
+            .collect(),
+    }
 }
 
 /// The first `max_matches` matching lines as JSON objects, and whether more
@@ -206,14 +268,14 @@ fn find_matches(
     let root = checkout_root(root)?;
     let mut matches = Vec::new();
     let mut truncated = false;
-    'files: for rel in collect_files(&root) {
+    'files: for rel in files_to_search(&root, literal) {
         let Ok(bytes) = fs::read(root.join(&rel)) else {
             continue;
         };
         let Ok(content) = String::from_utf8(bytes) else {
             continue;
         };
-        for (index, line) in split_lines(&content).into_iter().enumerate() {
+        for (number, line) in matching_lines(&content, literal) {
             let Some(column) = column_of(line, literal) else {
                 continue;
             };
@@ -224,7 +286,7 @@ fn find_matches(
             matches.push(format!(
                 "{{\"path\":{},\"line\":{},\"column\":{},\"text\":{}}}",
                 json_string(&rel),
-                index + 1,
+                number,
                 column,
                 json_string(clip(line, max_chars))
             ));
@@ -397,6 +459,61 @@ mod tests {
         assert_eq!(split_lines("a\r"), ["a\r"]);
         assert_eq!(split_lines("a\r\nb\r"), ["a", "b\r"]);
         assert_eq!(split_lines("a\r\r\n"), ["a\r"]);
+    }
+
+    /// The lines with the literal by the definition: every line of
+    /// `split_lines`, tested one by one.
+    fn naive_matching_lines<'a>(content: &'a str, literal: &str) -> Vec<(usize, &'a str)> {
+        split_lines(content)
+            .into_iter()
+            .enumerate()
+            .filter(|(_, line)| line.contains(literal))
+            .map(|(index, line)| (index + 1, line))
+            .collect()
+    }
+
+    #[test]
+    fn matching_lines_are_those_of_a_line_by_line_search() {
+        let contents = [
+            "",
+            "\n",
+            "\n\n\n",
+            "abc",
+            "abc\n",
+            "x\nabc\ny\nabcabc\nz",
+            "abc\r\nabc\r\n",
+            "a\r\r\nabc\r",
+            "ab\nc\nabc\nab\r\nc",
+            "abc\n\nabc\n\n\nabc",
+            "é abc é\nabç\nabc\n",
+            "no match here\nnor here\n",
+            "\r\n\r\nabc",
+        ];
+        for content in contents {
+            for literal in [
+                "abc", "a", "ab", "c", "\n", "\r", "c\n", "b\nc", "\nabc", "abc\r", "é", "zz",
+            ] {
+                assert_eq!(
+                    matching_lines(content, literal),
+                    naive_matching_lines(content, literal),
+                    "{content:?} {literal:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn first_lines_are_those_of_split_lines() {
+        for content in ["", "a", "a\n", "a\r\nb\nc\r\nd\ne\nf\ng"] {
+            for count in 0..8 {
+                let all = split_lines(content);
+                assert_eq!(
+                    first_lines(content, count),
+                    all[..count.min(all.len())],
+                    "{content:?} {count}"
+                );
+            }
+        }
     }
 
     #[test]

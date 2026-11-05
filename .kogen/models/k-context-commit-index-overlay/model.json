@@ -1,0 +1,11 @@
+{
+  "None": false,
+  "Path": ".kogen/models/k-context-commit-index-overlay/model.qnt",
+  "Invariants": [
+    "ServedFilesHaveTheCommitContent",
+    "TrustedEntriesAreOld"
+  ],
+  "Seed": "7",
+  "Samples": "2000",
+  "Steps": "20"
+}

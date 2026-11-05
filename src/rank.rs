@@ -5,7 +5,10 @@
 use std::fs;
 use std::path::Path;
 
-use crate::{Refusal, checkout_root, clip, collect_files, column_of, json_string, split_lines};
+use crate::{
+    Refusal, checkout_root, clip, column_of, files_to_search, first_lines, json_string,
+    matching_lines,
+};
 
 /// The order of the matches of a search request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,7 +209,7 @@ pub fn find_ranked_matches(
     max_chars: usize,
 ) -> Result<(Vec<String>, bool), Refusal> {
     let root = checkout_root(root)?;
-    let files = collect_files(&root);
+    let files = files_to_search(&root, literal);
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut total = 0usize;
     for (file, rel) in files.iter().enumerate() {
@@ -216,23 +219,24 @@ pub fn find_ranked_matches(
         let Ok(content) = String::from_utf8(bytes) else {
             continue;
         };
-        let lines = split_lines(&content);
         let mut info = None;
-        for (index, line) in lines.iter().enumerate() {
+        for (number, line) in matching_lines(&content, literal) {
             let Some(at) = line.find(literal) else {
                 continue;
             };
             total += 1;
-            let info = info.get_or_insert_with(|| file_info(rel, &lines));
+            let info = info.get_or_insert_with(|| {
+                file_info(rel, &first_lines(&content, GENERATED_MARKER_LINES))
+            });
             let column = column_of(line, literal).unwrap_or(1);
             candidates.push(Candidate {
                 tier: tier_of_line(info, line, at, literal.len()),
                 file,
-                line: index + 1,
+                line: number,
                 json: format!(
                     "{{\"path\":{},\"line\":{},\"column\":{},\"text\":{}}}",
                     json_string(rel),
-                    index + 1,
+                    number,
                     column,
                     json_string(clip(line, max_chars))
                 ),
