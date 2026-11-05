@@ -1,0 +1,1 @@
+{"version":1,"root":"tests/ranking/wpt","operation":"search","literal":"journal.shard","limits":{"max_matches":12},"order":"ranked"}

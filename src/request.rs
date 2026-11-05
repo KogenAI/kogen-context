@@ -6,6 +6,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use crate::json::{self, Json};
+use crate::rank::{Order, find_ranked_matches};
 use crate::{
     MAX_MATCHES, MAX_READ_LINES, MAX_TEXT_CHARS, Refusal, check_range, find_matches, json_string,
     read_lines,
@@ -19,6 +20,7 @@ enum Request {
         literal: String,
         max_matches: usize,
         max_line_chars: usize,
+        order: Order,
     },
     Read {
         root: String,
@@ -97,7 +99,7 @@ fn matches_schema(members: &[(String, Json)]) -> Option<Request> {
     };
     let (allowed, limit_names): (&[&str], &[&str]) = match operation.as_str() {
         "search" => (
-            &["version", "root", "operation", "literal", "limits"],
+            &["version", "root", "operation", "literal", "limits", "order"],
             &["max_matches", "max_line_chars"],
         ),
         "read" => (
@@ -141,11 +143,18 @@ fn matches_schema(members: &[(String, Json)]) -> Option<Request> {
     let root = string("root")?;
     let max_line_chars = limit("max_line_chars", MAX_TEXT_CHARS)?;
     if operation == "search" {
+        let order = match member("order") {
+            None => Order::Path,
+            Some(Json::String(s)) if s == "path" => Order::Path,
+            Some(Json::String(s)) if s == "ranked" => Order::Ranked,
+            Some(_) => return None,
+        };
         Some(Request::Search {
             root,
             literal: string("literal")?,
             max_matches: limit("max_matches", MAX_MATCHES)?,
             max_line_chars,
+            order,
         })
     } else {
         Some(Request::Read {
@@ -167,9 +176,14 @@ fn serve(request: &Request) -> Result<String, Refusal> {
             literal,
             max_matches,
             max_line_chars,
+            order,
         } => {
+            let find = match order {
+                Order::Path => find_matches,
+                Order::Ranked => find_ranked_matches,
+            };
             let (matches, truncated) =
-                find_matches(Path::new(root), literal, *max_matches, *max_line_chars)?;
+                find(Path::new(root), literal, *max_matches, *max_line_chars)?;
             Ok(format!(
                 "{{\"version\":1,\"operation\":\"search\",\"query\":{},\"matches\":[{}],\"truncated\":{},\"limits\":{{\"max_matches\":{},\"max_line_chars\":{}}}}}",
                 json_string(literal),
@@ -236,7 +250,8 @@ mod tests {
                 root: "r".into(),
                 literal: "x".into(),
                 max_matches: 100,
-                max_line_chars: 500
+                max_line_chars: 500,
+                order: Order::Path
             }
         );
         assert_eq!(
@@ -246,9 +261,24 @@ mod tests {
                 root: "r".into(),
                 literal: "x".into(),
                 max_matches: 2,
-                max_line_chars: 7
+                max_line_chars: 7,
+                order: Order::Path
             }
         );
+        for (extra, order) in [
+            (r#","order":"path""#, Order::Path),
+            (r#","order":"ranked""#, Order::Ranked),
+            (
+                r#","order":"ranked","limits":{"max_matches":3}"#,
+                Order::Ranked,
+            ),
+        ] {
+            let Request::Search { order: parsed, .. } = parse(search(extra).as_bytes()).unwrap()
+            else {
+                panic!("not a search request");
+            };
+            assert_eq!(parsed, order, "{extra}");
+        }
         assert_eq!(
             parse(read("").as_bytes()).unwrap(),
             Request::Read {
@@ -360,6 +390,17 @@ mod tests {
             search(r#","limits":{"max_line_chars":0}"#),
             search(r#","limits":{"max_lines":5}"#),
             search(r#","limits":{"extra":5}"#),
+            search(r#","order":"rank""#),
+            search(r#","order":"RANKED""#),
+            search(r#","order":"""#),
+            search(r#","order":1"#),
+            search(r#","order":null"#),
+            search(r#","order":["ranked"]"#),
+            search(r#","order":true"#),
+            search(r#","limits":{"order":"ranked"}"#),
+            read(r#","order":"ranked""#),
+            read(r#","order":"path""#),
+            read(r#","limits":{"order":"ranked"}"#),
             search(&big_limit("max_line_chars", 501)),
             read("").replace(r#""start":1"#, r#""start":0"#),
             read("").replace(r#""start":1"#, r#""start":"1""#),
@@ -409,6 +450,16 @@ mod tests {
             (
                 format!(
                     "{{\"version\":1,\"error\":{{\"code\":\"invalid_request\",\"message\":\"{NOT_JSON}\"}}}}"
+                ),
+                2
+            )
+        );
+        // The version wins over a bad order.
+        assert_eq!(
+            code_and_status(&search(r#","order":"ranked""#).replace(":1,", ":2,")),
+            (
+                format!(
+                    "{{\"version\":1,\"error\":{{\"code\":\"unsupported_version\",\"message\":\"{BAD_VERSION}\"}}}}"
                 ),
                 2
             )

@@ -20,6 +20,10 @@
             "max_line_chars": {"$ref": "#/$defs/max_line_chars"}
           },
           "additionalProperties": false
+        },
+        "order": {
+          "description": "The order of the matches. \"path\", the default, sorts them by path, then line. \"ranked\" lists definitions and call sites in source code first and docs and other files last.",
+          "enum": ["path", "ranked"]
         }
       },
       "required": ["version", "root", "operation", "literal"],

@@ -4,7 +4,7 @@ Kogen Context is a standalone Rust CLI in development for finding relevant sourc
 
 ## Current state
 
-The repo contains the Cargo scaffold and Kogen setup, the `search` and `read` commands, and `kogen-context request`, which reads one version 1 JSON request on standard input and writes one version 1 JSON packet on standard output. `kogen-context version` prints the package version and, in a release build, its tag and commit. `scripts/release.sh` and `scripts/release-check.sh` build and check release binaries. [`contract/`](contract/) publishes its schemas and examples. `.kogen/project.yaml` configures Claude Code: Sonnet 5.5 medium for Shape and Build, Opus 5.5 medium for Review.
+The repo contains the Cargo scaffold and Kogen setup, the `search` and `read` commands, and `kogen-context request`, which reads one version 1 JSON request on standard input and writes one version 1 JSON packet on standard output. A search request may ask for `"order": "ranked"`, which lists definitions and call sites in source code before tests, generated code, comments and docs; the default stays the path order. `kogen-context version` prints the package version and, in a release build, its tag and commit. `scripts/release.sh` and `scripts/release-check.sh` build and check release binaries. [`contract/`](contract/) publishes its schemas and examples. `.kogen/project.yaml` configures Claude Code: Sonnet 5.5 medium for Shape and Build, Opus 5.5 medium for Review.
 
 ## Source map
 
@@ -13,9 +13,10 @@ The repo contains the Cargo scaffold and Kogen setup, the `search` and `read` co
 - [`tests/`](tests/): Rust integration tests, including the contract test and the golden packet test
 - [`tests/corpus/`](tests/corpus/): the fixture corpus, a Go, a JS/TS and a Python checkout with binary, oversized and escaping symlinked paths
 - [`tests/goldens/`](tests/goldens/): the golden requests and packets of `kogen-context request` over the corpus
+- [`tests/ranking/`](tests/ranking/): the ranking fixtures (a REPL and a WPT shape) and their golden requests and packets, run by `tests/ranking.rs`
 - [`.kogen/project.yaml`](.kogen/project.yaml): Kogen project configuration
 - [`features/steps/README.md`](features/steps/README.md): feature steps notes
-- [`scripts/`](scripts/): the release build scripts
+- [`scripts/`](scripts/): the release build scripts and `scripts/crane-replay.sh`, the ranking replay on two pinned Crane revisions
 - [`rust-toolchain.toml`](rust-toolchain.toml): pinned Rust toolchain
 
 ## Checks
@@ -34,6 +35,17 @@ cargo build --locked --offline
 ```sh
 KOGEN_CONTEXT_UPDATE_GOLDENS=1 cargo test --locked --offline --test corpus
 ```
+
+## Ranking replay
+
+`scripts/crane-replay.sh` fetches two pinned public Crane revisions (`adc2ea58b65` and `b41782ab61d` of `https://github.com/zig-whatwg/crane.git`) into a temporary directory, searches them for a fixed list of hints in both orders and prints the rank of every match. Build the binary, then run:
+
+```sh
+cargo build --locked --offline
+sh scripts/crane-replay.sh target/debug/kogen-context
+```
+
+It needs network access, `git`, `tar` and `python3`, prints one tab-separated record per match (`revision`, `order`, `hint`, `rank`, `path:line`) and removes its temporary directory. Nothing of Crane is checked in.
 
 ## Release builds
 
@@ -54,7 +66,7 @@ Running the script again for the same tag replaces that tag's directory. The scr
 KOGEN_CONTEXT_BIN=/path/to/kogen-context cargo test --locked --offline --test corpus
 ```
 
-Nothing is published and release tags are not pushed. The scripts never create, move or push tags, never contact a remote and never upload.
+Nothing is published and release tags are not pushed. The release scripts never create, move or push tags, never contact a remote and never upload; the replay script above is the one script that uses the network.
 
 ## License
 

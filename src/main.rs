@@ -1,6 +1,7 @@
 //! `kogen-context`: exact literal search and bounded reads inside one checkout.
 
 mod json;
+mod rank;
 mod request;
 
 use std::fs;
