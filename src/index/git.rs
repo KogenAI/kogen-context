@@ -496,4 +496,25 @@ mod tests {
         assert_eq!(cat.next_blob(), Some(None));
         assert!(cat.finish());
     }
+
+    #[test]
+    fn a_response_for_another_object_is_refused() {
+        // A scripted reader stands in for Git: it answers with an id that
+        // was not the next one requested.
+        let mut child = Command::new("sh")
+            .args(["-c", "printf '%s missing\\n' bbbb"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let out = BufReader::new(child.stdout.take().unwrap());
+        let mut cat = CatFile {
+            child,
+            out,
+            feeder: None,
+            requested: vec![A.to_string()],
+            next: 0,
+        };
+        assert_eq!(cat.next_blob(), None);
+    }
 }

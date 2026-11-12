@@ -145,3 +145,16 @@ fn version_prints_one_line_and_takes_no_argument() {
         "{\"error\":{\"code\":\"usage\",\"message\":\"usage: kogen-context search ROOT LITERAL or kogen-context read ROOT PATH START END\"}}\n"
     );
 }
+
+#[test]
+fn search_refuses_an_empty_literal() {
+    let c = Checkout::new("empty-literal");
+    c.write("a.txt", b"x\n");
+    let out = run(&["search", path_str(&c.root()), ""]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        "{\"error\":{\"code\":\"usage\",\"message\":\"the search literal must not be empty\"}}\n"
+    );
+}
