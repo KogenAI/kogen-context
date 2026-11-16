@@ -755,3 +755,156 @@ fn without_git_the_search_falls_back_and_a_warm_search_needs_no_program() {
     assert_eq!(String::from_utf8_lossy(&out.stdout), expected);
     assert_eq!(s.cache_state(), noted);
 }
+
+#[test]
+fn retention_old_index_files_are_removed_by_a_writing_search() {
+    let mut s = Scenario::new("retention-old");
+    s.checkout("app", &APP);
+    s.search("app", "render", Search::Cli);
+    let old = SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60);
+    for file in s.cache_files() {
+        set_mtime(&s.cache().join(file), old);
+    }
+    s.write("app/new.txt", "render new\n");
+    s.commit("app");
+    s.search("app", "render", Search::Cli);
+    let mut expected = vec![s.commit_file("app"), s.tree_file(&s.head("app"), "app")];
+    expected.sort();
+    assert_eq!(s.cache_files(), expected);
+}
+
+#[test]
+fn retention_young_index_files_are_kept() {
+    let mut s = Scenario::new("retention-young");
+    s.checkout("app", &APP);
+    s.search("app", "render", Search::Cli);
+    let mut expected = s.cache_files();
+    let young = SystemTime::now() - Duration::from_secs(6 * 24 * 60 * 60);
+    for file in &expected {
+        set_mtime(&s.cache().join(file), young);
+    }
+    let temp = s
+        .cache()
+        .join("kogen-context/index-v1/trees/.stuck.2.0.tmp");
+    fs::write(&temp, "leftover").unwrap();
+    set_mtime(
+        &temp,
+        SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60),
+    );
+    s.write("app/new.txt", "render new\n");
+    s.commit("app");
+    s.search("app", "render", Search::Cli);
+    expected.extend([s.commit_file("app"), s.tree_file(&s.head("app"), "app")]);
+    expected.sort();
+    assert_eq!(s.cache_files(), expected);
+}
+
+#[test]
+fn retention_files_used_by_the_search_are_kept() {
+    let mut s = Scenario::new("retention-used");
+    s.checkout("app", &APP);
+    s.search("app", "render", Search::Cli);
+    let expected = s.cache_files();
+    s.write("app/extra.txt", "render extra\n");
+    s.age();
+    let old = SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60);
+    for file in &expected {
+        set_mtime(&s.cache().join(file), old);
+    }
+    let temp = s
+        .cache()
+        .join("kogen-context/index-v1/commits/.stuck.3.0.tmp");
+    fs::write(&temp, "leftover").unwrap();
+    set_mtime(&temp, old);
+    s.search("app", "render", Search::Cli);
+    assert_eq!(s.cache_files(), expected);
+}
+
+#[test]
+fn retention_touches_only_regular_files_of_the_index_directories() {
+    let mut s = Scenario::new("retention-scope");
+    s.checkout("app", &APP);
+    s.search("app", "render", Search::Cli);
+    let old_files = s.cache_files();
+    let old = SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60);
+    for file in &old_files {
+        set_mtime(&s.cache().join(file), old);
+    }
+    let untouched = [
+        "cache/kogen-context/index-v1/notes.txt",
+        "cache/kogen-context/other.txt",
+        "outside.txt",
+        "cache/kogen-context/index-v1/trees/nested/old.txt",
+    ];
+    for file in untouched {
+        s.write(file, "keep");
+        set_mtime(&s.path(file), old);
+    }
+    let link = s.path("cache/kogen-context/index-v1/trees/link");
+    std::os::unix::fs::symlink(s.path("outside.txt"), &link).unwrap();
+    s.write("app/new.txt", "render new\n");
+    s.commit("app");
+    s.search("app", "render", Search::Cli);
+    for file in old_files {
+        assert!(!s.cache().join(file).exists());
+    }
+    for file in untouched {
+        assert_eq!(fs::read_to_string(s.path(file)).unwrap(), "keep");
+    }
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(link).unwrap(), s.path("outside.txt"));
+}
+
+#[test]
+fn retention_a_warm_search_removes_nothing() {
+    let mut s = Scenario::new("retention-warm");
+    s.checkout("app", &APP);
+    s.age();
+    s.search("app", "render", Search::Cli);
+    let old_files = s.cache_files();
+    s.write("app/new.txt", "render new\n");
+    s.commit("app");
+    s.age();
+    s.search("app", "render", Search::Cli);
+    s.search("app", "render", Search::Cli);
+    for file in old_files {
+        set_mtime(
+            &s.cache().join(file),
+            SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60),
+        );
+    }
+    let noted = s.cache_state();
+    s.search("app", "render", Search::Cli);
+    assert_eq!(s.cache_state(), noted);
+}
+
+#[test]
+fn retention_a_failed_removal_does_not_fail_the_search() {
+    let mut s = Scenario::new("retention-failure");
+    s.checkout("app", &APP);
+    s.search("app", "render", Search::Cli);
+    let trees = s.cache().join("kogen-context/index-v1/trees");
+    let stuck = trees.join(".stuck.1.0.tmp");
+    fs::write(&stuck, "leftover").unwrap();
+    set_mtime(
+        &stuck,
+        SystemTime::now() - Duration::from_secs(8 * 24 * 60 * 60),
+    );
+    fs::set_permissions(&trees, fs::Permissions::from_mode(0o500)).unwrap();
+    let writable = fs::write(trees.join("probe"), "x").is_ok();
+    if writable {
+        fs::set_permissions(&trees, fs::Permissions::from_mode(0o700)).unwrap();
+        return;
+    }
+    s.write("app/new.txt", "render new\n");
+    s.commit("app");
+    s.search("app", "render", Search::Cli);
+    assert!(stuck.exists());
+    assert!(s.cache().join(s.commit_file("app")).exists());
+    fs::set_permissions(&trees, fs::Permissions::from_mode(0o700)).unwrap();
+}

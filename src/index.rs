@@ -36,8 +36,12 @@ pub fn open(root: &Path, literal: &str) -> Option<Overlay> {
     let checkout = git::discover(root)?;
     let commit = checkout.head_commit()?;
     let prefix = root.strip_prefix(&checkout.top).ok()?.to_str()?;
-    let index = load_commit_index(&cache, &checkout, &commit)?;
-    let snapshot = load_snapshot(&cache, &checkout, &commit, root, prefix, &index)?;
+    let (index, commit_published) = load_commit_index(&cache, &checkout, &commit)?;
+    let (snapshot, tree_published) =
+        load_snapshot(&cache, &checkout, &commit, root, prefix, &index)?;
+    if commit_published || tree_published {
+        cache.prune(&commit, root);
+    }
     let candidates = index.candidates(literal.as_bytes());
     Some(Overlay {
         index,
@@ -68,17 +72,21 @@ impl Overlay {
     }
 }
 
-fn load_commit_index(cache: &Cache, checkout: &Checkout, commit: &str) -> Option<CommitIndex> {
+fn load_commit_index(
+    cache: &Cache,
+    checkout: &Checkout,
+    commit: &str,
+) -> Option<(CommitIndex, bool)> {
     let file = cache.commit_file(commit);
     if let Some(index) = fs::File::open(&file)
         .ok()
         .and_then(|f| CommitIndex::open(Source::File(f), commit))
     {
-        return Some(index);
+        return Some((index, false));
     }
     let bytes = build_commit_index(checkout, commit)?;
-    cache::publish(&file, &bytes);
-    CommitIndex::open(Source::Memory(bytes), commit)
+    let published = cache::publish(&file, &bytes);
+    CommitIndex::open(Source::Memory(bytes), commit).map(|index| (index, published))
 }
 
 /// The commit index file for `commit`, built with `git ls-tree` and
@@ -104,7 +112,7 @@ fn load_snapshot(
     root: &Path,
     prefix: &str,
     index: &CommitIndex,
-) -> Option<Snapshot> {
+) -> Option<(Snapshot, bool)> {
     let file = cache.tree_file(commit, root);
     let existing = fs::read(&file).ok().and_then(|bytes| {
         Snapshot::decode(
@@ -115,16 +123,16 @@ fn load_snapshot(
         )
     });
     match existing {
-        Some(snapshot) if !snapshot.is_stale_at(format::now_ns()) => Some(snapshot),
+        Some(snapshot) if !snapshot.is_stale_at(format::now_ns()) => Some((snapshot, false)),
         // A racy snapshot older than the window is made again; if that fails,
         // the old one is still correct.
         other => match build_snapshot(checkout, root, prefix, index) {
             Some(snapshot) => {
                 let bytes = snapshot.encode(commit, root.as_os_str().as_bytes());
-                cache::publish(&file, &bytes);
-                Some(snapshot)
+                let published = cache::publish(&file, &bytes);
+                Some((snapshot, published))
             }
-            None => other,
+            None => other.map(|snapshot| (snapshot, false)),
         },
     }
 }

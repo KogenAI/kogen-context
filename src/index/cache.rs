@@ -8,6 +8,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime};
+
+const RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -85,6 +88,36 @@ impl Cache {
     pub fn tree_file(&self, commit: &str, root: &Path) -> PathBuf {
         let key = fnv1a(root.as_os_str().as_bytes());
         self.file("trees", &format!("{commit}-{key}"))
+    }
+
+    /// Best-effort removal of old regular index files, except this search's files.
+    pub fn prune(&self, commit: &str, root: &Path) {
+        let commit_file = self.commit_file(commit);
+        let tree_file = self.tree_file(commit, root);
+        let now = SystemTime::now();
+        for kind in ["commits", "trees"] {
+            let Ok(entries) = fs::read_dir(self.dir.join("index-v1").join(kind)) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path == commit_file || path == tree_file {
+                    continue;
+                }
+                let Ok(meta) = fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                if meta.is_file()
+                    && meta
+                        .modified()
+                        .ok()
+                        .and_then(|modified| now.duration_since(modified).ok())
+                        .is_some_and(|age| age > RETENTION)
+                {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
     }
 }
 
