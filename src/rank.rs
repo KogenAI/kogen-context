@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::{
     Refusal, checkout_root, clip, column_of, files_to_search, first_lines, json_string,
-    matching_lines,
+    matching_lines, read_utf8_blocks,
 };
 
 /// The order of the matches of a search request.
@@ -213,10 +213,10 @@ pub fn find_ranked_matches(
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut total = 0usize;
     for (file, rel) in files.iter().enumerate() {
-        let Ok(bytes) = fs::read(root.join(rel)) else {
-            continue;
-        };
-        let Ok(content) = String::from_utf8(bytes) else {
+        let Some(content) = fs::File::open(root.join(rel))
+            .ok()
+            .and_then(read_utf8_blocks)
+        else {
             continue;
         };
         let mut info = None;

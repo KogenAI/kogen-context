@@ -15,6 +15,39 @@ const MAX_MATCHES: usize = 100;
 const MAX_READ_LINES: u128 = 200;
 const MAX_TEXT_CHARS: usize = 500;
 
+const READ_BLOCK: usize = 65_536;
+
+/// Validate each block, retaining only an incomplete UTF-8 character for the next read.
+fn read_utf8_blocks(mut reader: impl std::io::Read) -> Option<String> {
+    let mut text = String::new();
+    let mut buffer = [0u8; READ_BLOCK + 3];
+    let mut pending = 0;
+    loop {
+        let count = match reader.read(&mut buffer[pending..pending + READ_BLOCK]) {
+            Ok(0) => return (pending == 0).then_some(text),
+            Ok(count) => count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        };
+        let end = pending + count;
+        match std::str::from_utf8(&buffer[..end]) {
+            Ok(valid) => {
+                text.push_str(valid);
+                pending = 0;
+            }
+            Err(error) => {
+                if error.error_len().is_some() {
+                    return None;
+                }
+                let valid_end = error.valid_up_to();
+                text.push_str(std::str::from_utf8(&buffer[..valid_end]).unwrap());
+                buffer.copy_within(valid_end..end, 0);
+                pending = end - valid_end;
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Refusal {
     code: &'static str,
@@ -269,10 +302,10 @@ fn find_matches(
     let mut matches = Vec::new();
     let mut truncated = false;
     'files: for rel in files_to_search(&root, literal) {
-        let Ok(bytes) = fs::read(root.join(&rel)) else {
-            continue;
-        };
-        let Ok(content) = String::from_utf8(bytes) else {
+        let Some(content) = fs::File::open(root.join(&rel))
+            .ok()
+            .and_then(read_utf8_blocks)
+        else {
             continue;
         };
         for (number, line) in matching_lines(&content, literal) {
@@ -404,8 +437,10 @@ fn read_lines(
         ));
     }
     let not_text = || Refusal::new("not_text", format!("file is not UTF-8 text: {path}"));
-    let bytes = fs::read(&resolved).map_err(|_| not_text())?;
-    let content = String::from_utf8(bytes).map_err(|_| not_text())?;
+    let content = fs::File::open(&resolved)
+        .ok()
+        .and_then(read_utf8_blocks)
+        .ok_or_else(not_text)?;
     let lines = split_lines(&content);
     let total = lines.len();
     if end > total as u128 {
@@ -514,6 +549,112 @@ mod tests {
                 );
             }
         }
+    }
+
+    struct CountingReader<R> {
+        inner: R,
+        bytes_read: usize,
+    }
+
+    impl<R: std::io::Read> std::io::Read for CountingReader<R> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let count = self.inner.read(buffer)?;
+            self.bytes_read += count;
+            Ok(count)
+        }
+    }
+
+    #[test]
+    fn reads_text_blocks_stops_at_the_first_invalid_block() {
+        use std::io::Read;
+        let mut reader = CountingReader {
+            inner: std::io::repeat(0xff).take(10_485_760),
+            bytes_read: 0,
+        };
+        assert_eq!(read_utf8_blocks(&mut reader), None);
+        assert!(reader.bytes_read <= 65_536);
+    }
+
+    #[test]
+    fn reads_text_blocks_finds_an_invalid_byte_in_a_later_block() {
+        use std::io::Read;
+        let mut reader = CountingReader {
+            inner: std::io::repeat(b'a')
+                .take(100_000)
+                .chain(std::io::Cursor::new([0xff]))
+                .chain(std::io::repeat(b'a').take(196_608 - 100_001)),
+            bytes_read: 0,
+        };
+        assert_eq!(read_utf8_blocks(&mut reader), None);
+        assert!(reader.bytes_read <= 131_072);
+    }
+
+    #[test]
+    fn reads_text_blocks_accepts_a_character_across_a_block_boundary() {
+        let expected = format!("{}ébc", "a".repeat(65_535));
+        let mut reader = CountingReader {
+            inner: std::io::Cursor::new(expected.as_bytes()),
+            bytes_read: 0,
+        };
+        assert_eq!(read_utf8_blocks(&mut reader), Some(expected.clone()));
+        assert_eq!(reader.bytes_read, expected.len());
+    }
+
+    #[test]
+    fn reads_text_blocks_refuses_an_incomplete_final_character() {
+        let mut reader = CountingReader {
+            inner: std::io::Cursor::new(b"abc\xc3"),
+            bytes_read: 0,
+        };
+        assert_eq!(read_utf8_blocks(&mut reader), None);
+        assert_eq!(reader.bytes_read, 4);
+    }
+
+    #[test]
+    fn reads_text_blocks_retries_interrupted_reads() {
+        struct InterruptedReader {
+            calls: usize,
+        }
+        impl std::io::Read for InterruptedReader {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.calls += 1;
+                match self.calls {
+                    1 | 3 => Err(std::io::ErrorKind::Interrupted.into()),
+                    2 => {
+                        buffer[0] = 0xc3;
+                        Ok(1)
+                    }
+                    4 => {
+                        buffer[0] = 0xa9;
+                        Ok(1)
+                    }
+                    _ => Ok(0),
+                }
+            }
+        }
+        let mut reader = CountingReader {
+            inner: InterruptedReader { calls: 0 },
+            bytes_read: 0,
+        };
+        assert_eq!(read_utf8_blocks(&mut reader), Some("é".to_owned()));
+        assert_eq!(reader.bytes_read, 2);
+    }
+
+    #[test]
+    fn reads_text_blocks_gives_nothing_when_the_read_fails() {
+        struct Fails;
+        impl std::io::Read for Fails {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("read failed"))
+            }
+        }
+        use std::io::Read;
+        let mut reader = CountingReader {
+            inner: std::io::repeat(b'a').take(1_000).chain(Fails),
+            bytes_read: 0,
+        };
+        assert_eq!(read_utf8_blocks(&mut reader), None);
+        assert_eq!(reader.bytes_read, 1_000);
     }
 
     #[test]
