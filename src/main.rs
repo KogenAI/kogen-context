@@ -128,21 +128,31 @@ fn run(args: &[std::ffi::OsString]) -> Result<String, Refusal> {
     let usage = || Refusal::new("usage", USAGE);
     match args.first().and_then(|a| a.to_str()) {
         Some("search") if args.len() == 3 => {
-            let literal = args[2].to_string_lossy();
+            let Some(literal) = args[2].to_str() else {
+                return Err(Refusal::new(
+                    "usage",
+                    "the search literal is not valid UTF-8",
+                ));
+            };
             if literal.is_empty() {
                 return Err(Refusal::new(
                     "usage",
                     "the search literal must not be empty",
                 ));
             }
-            search(Path::new(&args[1]), &literal)
+            search(Path::new(&args[1]), literal)
         }
-        Some("read") if args.len() == 5 => read(
-            Path::new(&args[1]),
-            &args[2].to_string_lossy(),
-            &args[3].to_string_lossy(),
-            &args[4].to_string_lossy(),
-        ),
+        Some("read") if args.len() == 5 => {
+            let Some(path) = args[2].to_str() else {
+                return Err(Refusal::new("usage", "the read path is not valid UTF-8"));
+            };
+            read(
+                Path::new(&args[1]),
+                path,
+                &args[3].to_string_lossy(),
+                &args[4].to_string_lossy(),
+            )
+        }
         _ => Err(usage()),
     }
 }

@@ -159,6 +159,76 @@ fn search_refuses_an_empty_literal() {
     );
 }
 
+fn run_os(args: &[&std::ffi::OsStr]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_kogen-context"))
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+const SEARCH_LITERAL_NOT_UTF8: &str =
+    "{\"error\":{\"code\":\"usage\",\"message\":\"the search literal is not valid UTF-8\"}}\n";
+
+#[test]
+fn utf8_argument_search_literal_is_refused() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let c = Checkout::new("utf8-literal");
+    c.write("a.txt", b"bad \xef\xbf\xbd\n");
+    let root = c.root();
+    let out = run_os(&[
+        OsStr::new("search"),
+        root.as_os_str(),
+        OsStr::from_bytes(b"\xff"),
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        SEARCH_LITERAL_NOT_UTF8
+    );
+}
+
+#[test]
+fn utf8_argument_read_path_is_refused() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let c = Checkout::new("utf8-path");
+    c.write("d/b.txt", b"a");
+    let root = c.root();
+    let out = run_os(&[
+        OsStr::new("read"),
+        root.as_os_str(),
+        OsStr::from_bytes(b"d/\xff"),
+        OsStr::new("1"),
+        OsStr::new("1"),
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        "{\"error\":{\"code\":\"usage\",\"message\":\"the read path is not valid UTF-8\"}}\n"
+    );
+}
+
+#[test]
+fn utf8_argument_refusal_comes_before_the_root_check() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let c = Checkout::new("utf8-root");
+    let missing = c.root().join("missing");
+    let out = run_os(&[
+        OsStr::new("search"),
+        missing.as_os_str(),
+        OsStr::from_bytes(b"\xff"),
+    ]);
+    assert_eq!(out.status.code(), Some(2));
+    assert_eq!(
+        String::from_utf8(out.stderr).unwrap(),
+        SEARCH_LITERAL_NOT_UTF8
+    );
+}
+
 /// Runs the binary with standard output on `/dev/full`, which fails every
 /// write; `None` where `/dev/full` does not exist (macOS).
 fn run_with_full_stdout(args: &[&str], stdin: Option<&[u8]>) -> Option<Output> {
