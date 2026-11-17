@@ -146,6 +146,43 @@ fn version_prints_one_line_and_takes_no_argument() {
     );
 }
 
+const HELP_LIST: &str = "usage:\n  kogen-context search ROOT LITERAL\n  kogen-context read ROOT PATH START END\n  kogen-context request\n  kogen-context version\n";
+
+#[test]
+fn help_flag_lists_every_command() {
+    assert_eq!(stdout(&run(&["--help"])), HELP_LIST);
+}
+
+#[test]
+fn help_short_forms_print_the_same_list() {
+    assert_eq!(stdout(&run(&["-h"])), HELP_LIST);
+    assert_eq!(stdout(&run(&["help"])), HELP_LIST);
+}
+
+#[test]
+fn help_with_more_arguments_is_still_usage() {
+    for args in [&["help", "extra"][..], &["--help", "search"][..]] {
+        let out = run(args);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(out.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(out.stderr).unwrap(),
+            "{\"error\":{\"code\":\"usage\",\"message\":\"usage: kogen-context search ROOT LITERAL or kogen-context read ROOT PATH START END\"}}\n"
+        );
+    }
+}
+
+#[test]
+fn help_as_a_search_literal_is_a_search() {
+    let c = Checkout::new("help-literal");
+    c.write("a.txt", b"help me\n");
+    let out = run(&["search", path_str(&c.root()), "help"]);
+    assert_eq!(
+        stdout(&out),
+        "{\"query\":\"help\",\"matches\":[{\"path\":\"a.txt\",\"line\":1,\"column\":1,\"text\":\"help me\"}],\"truncated\":false}\n"
+    );
+}
+
 #[test]
 fn search_refuses_an_empty_literal() {
     let c = Checkout::new("empty-literal");

@@ -12,6 +12,7 @@ use std::process::ExitCode;
 
 const USAGE: &str =
     "usage: kogen-context search ROOT LITERAL or kogen-context read ROOT PATH START END";
+const HELP: &str = "usage:\n  kogen-context search ROOT LITERAL\n  kogen-context read ROOT PATH START END\n  kogen-context request\n  kogen-context version";
 const MAX_MATCHES: usize = 100;
 const MAX_READ_LINES: u128 = 200;
 const MAX_TEXT_CHARS: usize = 500;
@@ -75,6 +76,8 @@ fn main() -> ExitCode {
     }
     let result = if args.len() == 1 && args[0] == "version" {
         Ok(version_line())
+    } else if args.len() == 1 && (args[0] == "--help" || args[0] == "-h" || args[0] == "help") {
+        Ok(HELP.to_string())
     } else {
         run(&args)
     };
