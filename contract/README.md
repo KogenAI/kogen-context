@@ -12,6 +12,8 @@ kogen-context request < request.json
 
 Every outcome, success or refusal, is exactly one compact JSON packet on stdout followed by `\n`; stderr stays empty.
 
+When standard output cannot be written, the command exits with status 1 and, for `request`, writes nothing to stderr.
+
 | Packet | Exit status |
 | --- | --- |
 | search or read packet | 0 |

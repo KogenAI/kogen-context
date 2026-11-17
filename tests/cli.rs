@@ -158,3 +158,69 @@ fn search_refuses_an_empty_literal() {
         "{\"error\":{\"code\":\"usage\",\"message\":\"the search literal must not be empty\"}}\n"
     );
 }
+
+/// Runs the binary with standard output on `/dev/full`, which fails every
+/// write; `None` where `/dev/full` does not exist (macOS).
+fn run_with_full_stdout(args: &[&str], stdin: Option<&[u8]>) -> Option<Output> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let full = fs::OpenOptions::new().write(true).open("/dev/full").ok()?;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kogen-context"))
+        .args(args)
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::from(full))
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    if let Some(bytes) = stdin {
+        child.stdin.take().unwrap().write_all(bytes).unwrap();
+    }
+    Some(child.wait_with_output().unwrap())
+}
+
+const OUTPUT_FAILED: &str =
+    "{\"error\":{\"code\":\"output_failed\",\"message\":\"cannot write to standard output\"}}\n";
+
+#[test]
+fn stdout_failure_request_exits_1_with_empty_stderr() {
+    let c = Checkout::new("stdout-failure-request");
+    c.write("a.txt", b"x\n");
+    let request = format!(
+        "{{\"version\":1,\"root\":{},\"operation\":\"search\",\"literal\":\"x\"}}",
+        crate_json(path_str(&c.root()))
+    );
+    let Some(out) = run_with_full_stdout(&["request"], Some(request.as_bytes())) else {
+        return;
+    };
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stderr.is_empty());
+}
+
+#[test]
+fn stdout_failure_search_writes_one_json_line_on_stderr() {
+    let c = Checkout::new("stdout-failure-search");
+    c.write("a.txt", b"x\n");
+    let Some(out) = run_with_full_stdout(&["search", path_str(&c.root()), "x"], None) else {
+        return;
+    };
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8(out.stderr).unwrap(), OUTPUT_FAILED);
+}
+
+#[test]
+fn stdout_failure_version_writes_one_json_line_on_stderr() {
+    let Some(out) = run_with_full_stdout(&["version"], None) else {
+        return;
+    };
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(String::from_utf8(out.stderr).unwrap(), OUTPUT_FAILED);
+}
+
+/// A JSON string literal for a path made of plain characters.
+fn crate_json(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}

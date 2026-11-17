@@ -6,6 +6,7 @@ mod rank;
 mod request;
 
 use std::fs;
+use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
@@ -72,17 +73,27 @@ fn main() -> ExitCode {
     if args.len() == 1 && args[0] == "request" {
         return request::serve_stdin();
     }
-    if args.len() == 1 && args[0] == "version" {
-        println!("{}", version_line());
-        return ExitCode::SUCCESS;
-    }
-    match run(&args) {
-        Ok(output) => {
-            println!("{output}");
-            ExitCode::SUCCESS
+    let result = if args.len() == 1 && args[0] == "version" {
+        Ok(version_line())
+    } else {
+        run(&args)
+    };
+    let result = result.and_then(|output| {
+        if write_line(&output) {
+            Ok(())
+        } else {
+            Err(Refusal::new(
+                "output_failed",
+                "cannot write to standard output",
+            ))
         }
+    });
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
         Err(refusal) => {
-            eprintln!(
+            // A failed write to stderr is ignored; `eprintln!` would panic.
+            let _ = writeln!(
+                std::io::stderr(),
                 "{{\"error\":{{\"code\":{},\"message\":{}}}}}",
                 json_string(refusal.code),
                 json_string(&refusal.message)
@@ -90,6 +101,13 @@ fn main() -> ExitCode {
             ExitCode::from(refusal.exit_status())
         }
     }
+}
+
+/// Writes `text` and a final `\n` to standard output and flushes; false when
+/// any of the three fails. Unlike `println!`, a failed write never panics.
+pub(crate) fn write_line(text: &str) -> bool {
+    let mut out = std::io::stdout().lock();
+    out.write_all(text.as_bytes()).is_ok() && out.write_all(b"\n").is_ok() && out.flush().is_ok()
 }
 
 /// The `version` line: the release tag and commit when both were set at compile time.

@@ -9,7 +9,7 @@ use crate::json::{self, Json};
 use crate::rank::{Order, find_ranked_matches};
 use crate::{
     MAX_MATCHES, MAX_READ_LINES, MAX_TEXT_CHARS, Refusal, check_range, find_matches, json_string,
-    read_lines,
+    read_lines, write_line,
 };
 
 /// A request that matches the version 1 request schema.
@@ -39,8 +39,13 @@ pub fn serve_stdin() -> ExitCode {
     // A failed read leaves a partial or empty input, which is no valid request.
     let read_ok = std::io::stdin().read_to_end(&mut input).is_ok();
     let (packet, status) = respond(if read_ok { &input } else { b"" });
-    println!("{packet}");
-    ExitCode::from(status)
+    // The packet is the only output of `request`: when it cannot be written,
+    // stderr stays empty as well.
+    if write_line(&packet) {
+        ExitCode::from(status)
+    } else {
+        ExitCode::from(1)
+    }
 }
 
 /// The packet for a request and the exit status that goes with it.
