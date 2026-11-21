@@ -1,10 +1,62 @@
 # Kogen Context
 
-Kogen Context is a standalone Rust CLI in development for finding relevant source code for coding agents. It is designed to take a task and a scoped checkout and return a small set of source excerpts with exact file and line references.
+Kogen Context is a standalone CLI for coding agents. Give it a checkout and an exact string, such as an error message or a function name. It returns matching file paths and line numbers, and can read just the lines you ask for. It works with any agent that can run shell commands.
+
+## Quickstart
+
+Install from source with Git, [rustup](https://rustup.rs/) and a system linker (for example, Xcode Command Line Tools on macOS or a C toolchain on Linux). Run these commands in the environment where your agent will work.
+
+```sh
+git clone https://github.com/KogenAI/kogen-context.git
+cd kogen-context
+rustup toolchain install --no-self-update
+cargo install --locked --path .
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+kogen-context --help
+```
+
+Rustup reads the pinned toolchain from the clone. If your agent opens a separate shell, check that it can run `kogen-context --help` there too. The CLI needs no Kogen installation, account, plugin or project setup.
+
+Try it from the clone:
+
+```sh
+kogen-context search contract/examples/checkout parse_config
+kogen-context read contract/examples/checkout util.py 1 2
+```
+
+The search lists the definition at `util.py:1` and its uses. The read prints lines 1 and 2. Both commands return JSON.
+
+### Agent prompt
+
+Open the checkout where the bug lives and paste this after the bug report:
+
+```text
+Use Kogen Context from this checkout. Pick an exact error string or symbol from
+the bug report and run kogen-context search . 'LITERAL' with that text.
+For the best match, run kogen-context read . PATH LINE LINE using its path and
+line number. Use total_lines from the response to keep any wider read within
+the file. Both endpoints are inclusive.
+If you need more evidence, use your normal tools. Fix the bug, run a targeted
+test and report the relevant file and line numbers and the test result.
+```
+
+### Request from JSON
+
+For a structured call, send one version 1 request on standard input. This one ranks matches in the fixture and returns at most 5:
+
+```sh
+kogen-context request <<'EOF'
+{"version":1,"root":"contract/examples/checkout","operation":"search","literal":"parse_config","order":"ranked","limits":{"max_matches":5}}
+EOF
+```
+
+The default order is by path. Ranked search prioritizes likely definitions and call sites using simple rules. Both modes look for exact, case-sensitive text. See the [request and packet contract](contract/).
+
+Search includes ignored files, so choose a narrow root where practical.
 
 ## Current state
 
-The repo contains the Cargo scaffold and Kogen setup, the `search` and `read` commands, and `kogen-context request`, which reads one version 1 JSON request on standard input and writes one version 1 JSON packet on standard output. A search request may ask for `"order": "ranked"`, which lists definitions and call sites in source code before tests, generated code, comments and docs; the default stays the path order. `kogen-context --help`, `-h` and `help` print the list of commands. `kogen-context version` prints the package version and, in a release build, its tag and commit. `scripts/release.sh` and `scripts/release-check.sh` build and check release binaries. [`contract/`](contract/) publishes its schemas and examples. A search on a Git checkout keeps a per-commit index in the per-user cache directory and overlays the working tree's edits on it (see [Search index](#search-index)); it changes speed only. `.kogen/project.yaml` configures Claude Code: Sonnet 5.5 medium for Shape and Build, Opus 5.5 medium for Review.
+Kogen Context is in development. Each invocation searches or reads one directory tree. The CLI reads source files without editing them. In a Git checkout, the first search can build an [index](#search-index) in your user cache automatically.
 
 ## Source map
 
