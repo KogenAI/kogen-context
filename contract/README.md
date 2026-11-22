@@ -20,6 +20,8 @@ When standard output cannot be written, the command exits with status 1 and, for
 | error packet, code `invalid_request` or `unsupported_version` | 2 |
 | error packet, any other code | 1 |
 
+An `invalid_request` refusal for a request that is valid JSON of version 1 but does not match the request schema names the first offending field and its problem, and never echoes the request. The message is `request does not match the version 1 request schema: ` followed by the problem. The first offending field is the first one of this order: `operation` (missing, not a string, or not `search` or `read`; the message then also names the unsupported value); a top-level member the operation does not allow, in request order; `limits` that is not an object; a member of `limits` the operation does not allow; then the value checks `root`, `limits.max_line_chars`, for a search `order`, `literal` and `limits.max_matches`, for a read `path`, `start`, `end` and `limits.max_lines`. An out-of-range limit is named with its accepted bound (1 to 100 for `max_matches`, 1 to 500 for `max_line_chars`, 1 to 200 for `max_lines`). Malformed JSON (`request is not one valid JSON object`) and an unsupported version (`request version must be 1`) keep their messages.
+
 A search request finds a literal in the searchable files under the checkout root; a read request returns an inclusive line range of one file. Both behave exactly like the unversioned `kogen-context search ROOT LITERAL` and `kogen-context read ROOT PATH START END` commands, which stay unchanged; the search does so in the path order. A request may lower the limits (`max_matches`, `max_lines`, `max_line_chars`); the packet reports the limits that were applied.
 
 ## Order of search matches

@@ -83,24 +83,31 @@ fn parse(input: &[u8]) -> Result<Request, Refusal> {
             ));
         }
     }
-    matches_schema(&members).ok_or_else(|| {
+    matches_schema(&members).map_err(|problem| {
         Refusal::new(
             "invalid_request",
-            "request does not match the version 1 request schema",
+            format!("request does not match the version 1 request schema: {problem}"),
         )
     })
 }
 
-/// The request if the object matches `contract/request.schema.json`.
-fn matches_schema(members: &[(String, Json)]) -> Option<Request> {
+/// The request if the object matches `contract/request.schema.json`, else the
+/// first offending field and its problem. The message carries only a field
+/// name, an unsupported operation or an accepted bound, never the request.
+fn matches_schema(members: &[(String, Json)]) -> Result<Request, String> {
     let member = |name: &str| Json::member(members, name);
     let string = |name: &str| match member(name) {
-        Some(Json::String(s)) if !s.is_empty() => Some(s.clone()),
-        _ => None,
+        Some(Json::String(s)) if !s.is_empty() => Ok(s.clone()),
+        Some(Json::String(_)) => Err(format!("{name} must not be empty")),
+        Some(_) => Err(format!("{name} must be a string")),
+        None => Err(format!("{name} is missing")),
     };
     let bounded = |value: &Json, max: u128| value.integer().filter(|n| (1..=max).contains(n));
     let Some(Json::String(operation)) = member("operation") else {
-        return None;
+        return Err(match member("operation") {
+            None => "operation is missing".to_string(),
+            Some(_) => "operation must be a string".to_string(),
+        });
     };
     let (allowed, limit_names): (&[&str], &[&str]) = match operation.as_str() {
         "search" => (
@@ -119,31 +126,44 @@ fn matches_schema(members: &[(String, Json)]) -> Option<Request> {
             ],
             &["max_lines", "max_line_chars"],
         ),
-        _ => return None,
+        _ => {
+            return Err(format!(
+                "operation {operation:?} is not supported, expected \"search\" or \"read\""
+            ));
+        }
     };
-    if members
+    if let Some((name, _)) = members
         .iter()
-        .any(|(name, _)| !allowed.contains(&name.as_str()))
+        .find(|(name, _)| !allowed.contains(&name.as_str()))
     {
-        return None;
+        return Err(format!("{name} is not a member of a {operation} request"));
     }
     let limits: &[(String, Json)] = match member("limits") {
         None => &[],
         Some(Json::Object(limits)) => limits,
-        Some(_) => return None,
+        Some(_) => return Err("limits must be an object".to_string()),
     };
-    if limits
+    if let Some((name, _)) = limits
         .iter()
-        .any(|(name, _)| !limit_names.contains(&name.as_str()))
+        .find(|(name, _)| !limit_names.contains(&name.as_str()))
     {
-        return None;
+        return Err(format!(
+            "limits.{name} is not a limit of a {operation} request"
+        ));
     }
     // The applied value of a limit: the request's, or the default when absent.
-    let limit = |name: &str, max: usize| -> Option<usize> {
+    let limit = |name: &str, max: usize| -> Result<usize, String> {
         match Json::member(limits, name) {
-            None => Some(max),
-            Some(value) => bounded(value, max as u128).map(|n| n as usize),
+            None => Ok(max),
+            Some(value) => bounded(value, max as u128)
+                .map(|n| n as usize)
+                .ok_or_else(|| format!("limits.{name} must be an integer from 1 to {max}")),
         }
+    };
+    let line_number = |name: &str| match member(name) {
+        None => Err(format!("{name} is missing")),
+        Some(value) => bounded(value, u128::MAX)
+            .ok_or_else(|| format!("{name} must be an integer of at least 1")),
     };
     let root = string("root")?;
     let max_line_chars = limit("max_line_chars", MAX_TEXT_CHARS)?;
@@ -152,9 +172,9 @@ fn matches_schema(members: &[(String, Json)]) -> Option<Request> {
             None => Order::Path,
             Some(Json::String(s)) if s == "path" => Order::Path,
             Some(Json::String(s)) if s == "ranked" => Order::Ranked,
-            Some(_) => return None,
+            Some(_) => return Err("order must be \"path\" or \"ranked\"".to_string()),
         };
-        Some(Request::Search {
+        Ok(Request::Search {
             root,
             literal: string("literal")?,
             max_matches: limit("max_matches", MAX_MATCHES)?,
@@ -162,11 +182,11 @@ fn matches_schema(members: &[(String, Json)]) -> Option<Request> {
             order,
         })
     } else {
-        Some(Request::Read {
+        Ok(Request::Read {
             root,
             path: string("path")?,
-            start: bounded(member("start")?, u128::MAX)?,
-            end: bounded(member("end")?, u128::MAX)?,
+            start: line_number("start")?,
+            end: line_number("end")?,
             max_lines: limit("max_lines", MAX_READ_LINES as usize)? as u128,
             max_line_chars,
         })
@@ -228,7 +248,7 @@ mod tests {
 
     const NOT_JSON: &str = "request is not one valid JSON object";
     const BAD_VERSION: &str = "request version must be 1";
-    const BAD_SCHEMA: &str = "request does not match the version 1 request schema";
+    const BAD_SCHEMA: &str = "request does not match the version 1 request schema: ";
 
     fn refusal(input: &str) -> (&'static str, String) {
         let r = parse(input.as_bytes()).unwrap_err();
@@ -423,12 +443,105 @@ mod tests {
         ];
         bad.push(read("").replace(r#""operation":"read""#, r#""operation":"search""#));
         for request in bad {
-            assert_eq!(
-                refusal(&request),
-                ("invalid_request", BAD_SCHEMA.into()),
-                "{request}"
+            let (code, message) = refusal(&request);
+            assert_eq!(code, "invalid_request", "{request}");
+            assert!(message.starts_with(BAD_SCHEMA), "{request}: {message}");
+            assert!(!message.contains("\"r\""), "{request}: {message}");
+        }
+    }
+
+    #[test]
+    fn schema_refusals_name_the_first_offending_field() {
+        let big_limit = |name: &str, n: u32| format!(r#","limits":{{"{name}":{n}}}"#);
+        let cases: Vec<(String, &str)> = vec![
+            (r#"{"version":1}"#.into(), "operation is missing"),
+            (
+                search("").replace(r#""operation":"search""#, r#""operation":1"#),
+                "operation must be a string",
+            ),
+            (
+                search("").replace("search", "find"),
+                r#"operation "find" is not supported"#,
+            ),
+            // The operation wins over a later offending field.
+            (
+                search(r#","extra":true,"limits":{"max_matches":101}"#).replace("search", "find"),
+                r#"operation "find""#,
+            ),
+            (
+                search(r#","extra":true"#),
+                "extra is not a member of a search request",
+            ),
+            (
+                read(r#","literal":"x""#),
+                "literal is not a member of a read request",
+            ),
+            // A top-level member wins over a limit.
+            (
+                search(r#","extra":true,"limits":{"max_matches":101}"#),
+                "extra is not a member",
+            ),
+            (search(r#","limits":[]"#), "limits must be an object"),
+            (
+                search(r#","limits":{"max_lines":5}"#),
+                "limits.max_lines is not a limit of a search request",
+            ),
+            (
+                search(&big_limit("max_matches", 101)),
+                "limits.max_matches must be an integer from 1 to 100",
+            ),
+            (
+                search(&big_limit("max_line_chars", 501)),
+                "limits.max_line_chars must be an integer from 1 to 500",
+            ),
+            (
+                read(&big_limit("max_lines", 201)),
+                "limits.max_lines must be an integer from 1 to 200",
+            ),
+            (
+                read(&big_limit("max_line_chars", 0)),
+                "limits.max_line_chars must be an integer from 1 to 500",
+            ),
+            (
+                search("").replace(r#""root":"r""#, r#""root":"""#),
+                "root must not be empty",
+            ),
+            (
+                search("").replace(r#","literal":"x""#, ""),
+                "literal is missing",
+            ),
+            (search(r#","order":"rank""#), "order must be"),
+            (
+                read("").replace(r#""start":1"#, r#""start":0"#),
+                "start must be an integer",
+            ),
+            (read("").replace(r#","end":2"#, ""), "end is missing"),
+            (
+                read("").replace(r#""path":"p""#, r#""path":1"#),
+                "path must be a string",
+            ),
+            // The value checks run in order: root, max_line_chars, the rest.
+            (
+                search(&big_limit("max_matches", 101))
+                    .replace(r#""literal":"x""#, r#""literal":1"#),
+                "literal must be a string",
+            ),
+            (
+                read(r#","limits":{"max_lines":0}"#).replace(r#""start":1"#, r#""start":0"#),
+                "start must be an integer",
+            ),
+        ];
+        for (request, expected) in cases {
+            let (code, message) = refusal(&request);
+            assert_eq!(code, "invalid_request", "{request}");
+            assert!(
+                message.starts_with(&format!("{BAD_SCHEMA}{expected}")),
+                "{request}: {message}"
             );
         }
+        // An unknown member never makes the message carry the request.
+        let message = refusal(&search(r#","extra":true"#).replace("\"r\"", "\"marker-root\"")).1;
+        assert!(!message.contains("marker-root"), "{message}");
     }
 
     #[test]

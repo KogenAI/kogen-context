@@ -579,3 +579,65 @@ fn every_example_runs_to_its_packet() {
         );
     }
 }
+
+/// Runs `kogen-context request` on `request` and returns the status, the
+/// standard error and the parsed error packet.
+fn run_refused_request(request: &str) -> (Option<i32>, Vec<u8>, Value) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kogen-context"))
+        .arg("request")
+        .current_dir(repo())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cannot run kogen-context");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(request.as_bytes())
+        .expect("cannot write the request");
+    let output = child.wait_with_output().unwrap();
+    let packet = parse_json(std::str::from_utf8(&output.stdout).unwrap())
+        .unwrap_or_else(|e| panic!("{request}: stdout is not valid JSON: {e}"));
+    (output.status.code(), output.stderr, packet)
+}
+
+#[test]
+fn schema_refusals_name_the_offending_field() {
+    let cases = [
+        (
+            r#"{"version":1,"root":"marker-root-1f3a","operation":"find","literal":"x"}"#,
+            vec!["operation", "find"],
+        ),
+        (
+            r#"{"version":1,"root":"marker-root-1f3a","operation":"search","literal":"x","extra_member":true}"#,
+            vec!["extra_member"],
+        ),
+        (
+            r#"{"version":1,"root":"marker-root-1f3a","operation":"search","literal":"x","limits":{"max_matches":101}}"#,
+            vec!["max_matches", "100"],
+        ),
+    ];
+    for (request, names) in cases {
+        let (status, stderr, packet) = run_refused_request(request);
+        assert_eq!(status, Some(2), "{request}");
+        assert!(stderr.is_empty(), "{request}");
+        let error = packet.member("error").expect("error member");
+        assert_eq!(
+            error.member("code"),
+            Some(&Value::String("invalid_request".to_string())),
+            "{request}"
+        );
+        let Some(Value::String(message)) = error.member("message") else {
+            panic!("{request}: no message");
+        };
+        for name in names {
+            assert!(message.contains(name), "{request}: {message}");
+        }
+        assert!(
+            !message.contains("marker-root-1f3a"),
+            "{request}: {message}"
+        );
+    }
+}
