@@ -662,6 +662,27 @@ mod tests {
     }
 
     #[test]
+    fn reads_text_blocks_accepts_a_four_byte_character_split_after_each_of_its_first_three_bytes() {
+        // The text starts with a four-byte character so that the first block also
+        // begins with a byte of a four-byte character.
+        for kept in 1..=3 {
+            let filler = READ_BLOCK - kept - 4;
+            let expected = format!("😀{}😀bc", "a".repeat(filler));
+            assert_eq!(expected.as_bytes()[READ_BLOCK - kept], 0xf0);
+            let mut reader = CountingReader {
+                inner: std::io::Cursor::new(expected.as_bytes()),
+                bytes_read: 0,
+            };
+            assert_eq!(
+                read_utf8_blocks(&mut reader),
+                Some(expected.clone()),
+                "split after {kept} bytes"
+            );
+            assert_eq!(reader.bytes_read, expected.len());
+        }
+    }
+
+    #[test]
     fn reads_text_blocks_refuses_an_incomplete_final_character() {
         let mut reader = CountingReader {
             inner: std::io::Cursor::new(b"abc\xc3"),
