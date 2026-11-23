@@ -317,7 +317,7 @@ pub(crate) fn walk_files(root: &Path, with_meta: bool) -> Vec<(String, Option<fs
                 if name != ".git" {
                     pending.push((entry.path(), rel));
                 }
-            } else if kind.is_file() {
+            } else if kind.is_file() && name != ".git" {
                 let meta = if with_meta {
                     entry.metadata().ok()
                 } else {

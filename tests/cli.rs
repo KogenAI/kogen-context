@@ -66,6 +66,20 @@ fn search_orders_paths_bytewise_and_skips_unreadable_content() {
 }
 
 #[test]
+fn search_skips_regular_git_file_without_hiding_siblings() {
+    let c = Checkout::new("git-file");
+    c.write(".git", b"gitdir: ../parse_config\n");
+    c.write("app.py", b"x = parse_config()\n");
+    let out = run(&["search", path_str(&c.root()), "parse_config"]);
+    assert_eq!(
+        stdout(&out),
+        "{\"query\":\"parse_config\",\"matches\":[\
+{\"path\":\"app.py\",\"line\":1,\"column\":5,\"text\":\"x = parse_config()\"}],\
+\"truncated\":false}\n"
+    );
+}
+
+#[test]
 fn search_bounds_matches_to_100() {
     let c = Checkout::new("bound");
     c.write("many.txt", "needle\n".repeat(101).as_bytes());

@@ -1,0 +1,54 @@
+{
+  "correct": {
+    "files": {
+      "src/main.rs": {
+        "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -317,7 +317,7 @@\n                 if name != \".git\" {\n                     pending.push((entry.path(), rel));\n                 }\n-            } else if kind.is_file() {\n+            } else if kind.is_file() && name != \".git\" {\n                 let meta = if with_meta {\n                     entry.metadata().ok()\n                 } else {\n"
+      },
+      "tests/cli.rs": {
+        "patch": "--- a/tests/cli.rs\n+++ b/tests/cli.rs\n@@ -405,3 +405,14 @@\n         );\n     }\n }\n+\n+#[test]\n+fn search_skips_a_regular_dot_git_file_and_keeps_sibling_matches() {\n+    let c = Checkout::new(\"git-file-exclusion\");\n+    c.write(\".git\", b\"gitdir: ../parse_config\\n\");\n+    c.write(\"app.py\", b\"x = parse_config()\\n\");\n+    assert_eq!(\n+        stdout(&run(&[\"search\", path_str(&c.root()), \"parse_config\"])),\n+        \"{\\\"query\\\":\\\"parse_config\\\",\\\"matches\\\":[{\\\"path\\\":\\\"app.py\\\",\\\"line\\\":1,\\\"column\\\":5,\\\"text\\\":\\\"x = parse_config()\\\"}],\\\"truncated\\\":false}\\n\"\n+    );\n+}\n"
+      }
+    }
+  },
+  "wrong": [
+    {
+      "name": "Search the .git pointer",
+      "scenario": "Exclude a regular .git pointer and retain a sibling match",
+      "step": "Then skip-linked-worktree-git-file: the search succeeds with exactly this JSON",
+      "files": {
+        "src/main.rs": {
+          "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -317,7 +317,7 @@\n                 if name != \".git\" {\n                     pending.push((entry.path(), rel));\n                 }\n-            } else if kind.is_file() && name != \".git\" {\n+            } else if kind.is_file() {\n                 let meta = if with_meta {\n                     entry.metadata().ok()\n                 } else {\n"
+        }
+      }
+    },
+    {
+      "name": "Hide the checkout with a .git file",
+      "scenario": "Exclude a regular .git pointer and retain a sibling match",
+      "step": "Then skip-linked-worktree-git-file: the search succeeds with exactly this JSON",
+      "files": {
+        "src/main.rs": {
+          "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -295,6 +295,9 @@\n /// `root`, in bytewise path order, with the `lstat` of its directory entry\n /// when `with_meta` is set.\n pub(crate) fn walk_files(root: &Path, with_meta: bool) -> Vec<(String, Option<fs::Metadata>)> {\n+    if root.join(\".git\").is_file() {\n+        return Vec::new();\n+    }\n     let mut files = Vec::new();\n     let mut pending: Vec<(PathBuf, String)> = vec![(root.to_path_buf(), String::new())];\n     while let Some((dir, prefix)) = pending.pop() {\n"
+        }
+      }
+    },
+    {
+      "name": "Expose .git directory contents",
+      "scenario": "Exclude .git directory contents and retain a sibling match",
+      "step": "Then skip-linked-worktree-git-file: the search succeeds with exactly this JSON",
+      "files": {
+        "src/main.rs": {
+          "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -314,9 +314,7 @@\n                 format!(\"{prefix}/{name}\")\n             };\n             if kind.is_dir() {\n-                if name != \".git\" {\n-                    pending.push((entry.path(), rel));\n-                }\n+                pending.push((entry.path(), rel));\n             } else if kind.is_file() && name != \".git\" {\n                 let meta = if with_meta {\n                     entry.metadata().ok()\n"
+        }
+      }
+    },
+    {
+      "name": "Hide the checkout with a .git directory",
+      "scenario": "Exclude .git directory contents and retain a sibling match",
+      "step": "Then skip-linked-worktree-git-file: the search succeeds with exactly this JSON",
+      "files": {
+        "src/main.rs": {
+          "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -295,6 +295,9 @@\n /// `root`, in bytewise path order, with the `lstat` of its directory entry\n /// when `with_meta` is set.\n pub(crate) fn walk_files(root: &Path, with_meta: bool) -> Vec<(String, Option<fs::Metadata>)> {\n+    if root.join(\".git\").is_dir() {\n+        return Vec::new();\n+    }\n     let mut files = Vec::new();\n     let mut pending: Vec<(PathBuf, String)> = vec![(root.to_path_buf(), String::new())];\n     while let Some((dir, prefix)) = pending.pop() {\n"
+        }
+      }
+    }
+  ]
+}
