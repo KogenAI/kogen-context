@@ -176,7 +176,14 @@ fn run(args: &[std::ffi::OsString]) -> Result<String, Refusal> {
                 &args[4].to_string_lossy(),
             )
         }
-        _ => Err(usage()),
+        Some("search" | "read" | "request" | "version" | "help" | "--help" | "-h") => Err(usage()),
+        _ => match args.first() {
+            None => Err(usage()),
+            Some(word) => Err(Refusal::new(
+                "usage",
+                format!("unknown command: {}; {USAGE}", word.to_string_lossy()),
+            )),
+        },
     }
 }
 

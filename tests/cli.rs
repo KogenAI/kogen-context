@@ -392,3 +392,16 @@ fn stdout_failure_version_writes_one_json_line_on_stderr() {
 fn crate_json(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
+
+#[test]
+fn unknown_command_is_named_in_the_usage_refusal() {
+    for args in [&["frobnicate"][..], &["frobnicate", "extra"][..]] {
+        let out = run(args);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(out.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(out.stderr).unwrap(),
+            "{\"error\":{\"code\":\"usage\",\"message\":\"unknown command: frobnicate; usage: kogen-context search ROOT LITERAL or kogen-context read ROOT PATH START END\"}}\n"
+        );
+    }
+}
