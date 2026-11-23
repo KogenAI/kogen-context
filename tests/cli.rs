@@ -127,6 +127,67 @@ fn read_returns_bounded_range_and_refuses_bad_requests() {
     assert!(out.stdout.is_empty());
 }
 
+fn refusal(out: &Output) -> (String, String) {
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    let line = String::from_utf8(out.stderr.clone()).unwrap();
+    let body = line
+        .strip_prefix("{\"error\":{\"code\":\"")
+        .and_then(|rest| rest.strip_suffix("\"}}\n"))
+        .unwrap();
+    let (code, message) = body.split_once("\",\"message\":\"").unwrap();
+    (code.to_owned(), message.to_owned())
+}
+
+#[test]
+fn read_refuses_invalid_utf8_as_not_text() {
+    let c = Checkout::new("read-not-text");
+    c.write("broken-encoding.txt", b"\xff\xfe\n");
+    c.write("cut.txt", b"ok\n\xc3");
+    let root = c.root();
+    let root = path_str(&root);
+    for name in ["broken-encoding.txt", "cut.txt"] {
+        let (code, message) = refusal(&run(&["read", root, name, "1", "1"]));
+        assert_eq!(code, "not_text");
+        assert_eq!(message, format!("file is not UTF-8 text: {name}"));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn read_refuses_unreadable_file_as_io_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let c = Checkout::new("read-unreadable");
+    c.write("locked-notes.txt", b"secret\n");
+    let file = c.root().join("locked-notes.txt");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::File::open(&file).is_ok() {
+        return;
+    }
+    let root = c.root();
+    let (code, message) = refusal(&run(&[
+        "read",
+        path_str(&root),
+        "locked-notes.txt",
+        "1",
+        "1",
+    ]));
+    assert_eq!(code, "io_error");
+    assert!(message.starts_with("cannot read file: locked-notes.txt: "));
+    assert!(!message.contains("not UTF-8"));
+}
+
+#[test]
+fn read_refuses_read_failure_as_io_error() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let (code, message) = refusal(&run(&["read", "/proc/self", "mem", "1", "1"]));
+    assert_eq!(code, "io_error");
+    assert!(message.starts_with("cannot read file: mem: "));
+    assert!(!message.contains("not UTF-8"));
+}
+
 #[test]
 fn version_prints_one_line_and_takes_no_argument() {
     let out = run(&["version"]);

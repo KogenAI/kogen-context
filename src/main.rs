@@ -20,16 +20,36 @@ const MAX_TEXT_CHARS: usize = 500;
 const READ_BLOCK: usize = 65_536;
 
 /// Validate each block, retaining only an incomplete UTF-8 character for the next read.
-fn read_utf8_blocks(mut reader: impl std::io::Read) -> Option<String> {
+fn read_utf8_blocks(reader: impl std::io::Read) -> Option<String> {
+    read_utf8_checked(reader).ok()
+}
+
+/// Why a file's text could not be read.
+#[derive(Debug)]
+enum ReadFailure {
+    /// The content is not valid UTF-8.
+    NotText,
+    /// Reading failed in the operating system.
+    Io(std::io::Error),
+}
+
+/// Like `read_utf8_blocks`, but tells invalid content apart from an I/O error.
+fn read_utf8_checked(mut reader: impl std::io::Read) -> Result<String, ReadFailure> {
     let mut text = String::new();
     let mut buffer = [0u8; READ_BLOCK + 3];
     let mut pending = 0;
     loop {
         let count = match reader.read(&mut buffer[pending..pending + READ_BLOCK]) {
-            Ok(0) => return (pending == 0).then_some(text),
+            Ok(0) => {
+                return if pending == 0 {
+                    Ok(text)
+                } else {
+                    Err(ReadFailure::NotText)
+                };
+            }
             Ok(count) => count,
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => return None,
+            Err(error) => return Err(ReadFailure::Io(error)),
         };
         let end = pending + count;
         match std::str::from_utf8(&buffer[..end]) {
@@ -39,7 +59,7 @@ fn read_utf8_blocks(mut reader: impl std::io::Read) -> Option<String> {
             }
             Err(error) => {
                 if error.error_len().is_some() {
-                    return None;
+                    return Err(ReadFailure::NotText);
                 }
                 let valid_end = error.valid_up_to();
                 text.push_str(std::str::from_utf8(&buffer[..valid_end]).unwrap());
@@ -467,11 +487,14 @@ fn read_lines(
             format!("not a regular file: {path}"),
         ));
     }
-    let not_text = || Refusal::new("not_text", format!("file is not UTF-8 text: {path}"));
-    let content = fs::File::open(&resolved)
-        .ok()
-        .and_then(read_utf8_blocks)
-        .ok_or_else(not_text)?;
+    let io_error = |error: std::io::Error| {
+        Refusal::new("io_error", format!("cannot read file: {path}: {error}"))
+    };
+    let file = fs::File::open(&resolved).map_err(io_error)?;
+    let content = read_utf8_checked(file).map_err(|failure| match failure {
+        ReadFailure::NotText => Refusal::new("not_text", format!("file is not UTF-8 text: {path}")),
+        ReadFailure::Io(error) => io_error(error),
+    })?;
     let lines = split_lines(&content);
     let total = lines.len();
     if end > total as u128 {
