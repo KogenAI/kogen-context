@@ -419,3 +419,34 @@ fn unknown_command_is_named_in_the_usage_refusal() {
         );
     }
 }
+
+#[test]
+fn wrong_arity_names_the_command_and_expected_count() {
+    for (command, positional, expected) in [
+        (
+            "search",
+            &["contract/examples/checkout", "parse_config", "extra"][..],
+            "2",
+        ),
+        (
+            "read",
+            &["contract/examples/checkout", "util.py", "1", "2", "extra"][..],
+            "4",
+        ),
+    ] {
+        for count in (0..positional.len() - 1).chain(std::iter::once(positional.len())) {
+            let mut args = vec![command];
+            args.extend_from_slice(&positional[..count]);
+            let out = run(&args);
+            assert_eq!(out.status.code(), Some(2), "{args:?}");
+            assert!(out.stdout.is_empty(), "{args:?}");
+            let stderr = String::from_utf8(out.stderr).unwrap();
+            let message = stderr
+                .strip_prefix("{\"error\":{\"code\":\"usage\",\"message\":\"")
+                .and_then(|rest| rest.strip_suffix("\"}}\n"))
+                .unwrap();
+            assert!(message.contains(command), "{args:?}: {message}");
+            assert!(message.contains(expected), "{args:?}: {message}");
+        }
+    }
+}

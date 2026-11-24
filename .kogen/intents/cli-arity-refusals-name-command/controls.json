@@ -1,0 +1,64 @@
+{
+  "correct": {
+    "files": {
+      "src/main.rs": {
+        "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -176,7 +176,15 @@\n                 &args[4].to_string_lossy(),\n             )\n         }\n-        Some(\"search\" | \"read\" | \"request\" | \"version\" | \"help\" | \"--help\" | \"-h\") => Err(usage()),\n+        Some(\"search\") => Err(Refusal::new(\n+            \"usage\",\n+            \"search expects 2 arguments: ROOT LITERAL\",\n+        )),\n+        Some(\"read\") => Err(Refusal::new(\n+            \"usage\",\n+            \"read expects 4 arguments: ROOT PATH START END\",\n+        )),\n+        Some(\"request\" | \"version\" | \"help\" | \"--help\" | \"-h\") => Err(usage()),\n         _ => match args.first() {\n             None => Err(usage()),\n             Some(word) => Err(Refusal::new(\n"
+      },
+      "tests/cli.rs": {
+        "patch": "--- a/tests/cli.rs\n+++ b/tests/cli.rs\n@@ -419,3 +419,47 @@\n         );\n     }\n }\n+\n+#[test]\n+fn wrong_arity_names_search_and_read_and_their_expected_counts() {\n+    for (args, message) in [\n+        (vec![\"search\"], \"search expects 2 arguments: ROOT LITERAL\"),\n+        (\n+            vec![\"search\", \".\"],\n+            \"search expects 2 arguments: ROOT LITERAL\",\n+        ),\n+        (\n+            vec![\"search\", \".\", \"needle\", \"extra\"],\n+            \"search expects 2 arguments: ROOT LITERAL\",\n+        ),\n+        (\n+            vec![\"read\"],\n+            \"read expects 4 arguments: ROOT PATH START END\",\n+        ),\n+        (\n+            vec![\"read\", \".\"],\n+            \"read expects 4 arguments: ROOT PATH START END\",\n+        ),\n+        (\n+            vec![\"read\", \".\", \"file\"],\n+            \"read expects 4 arguments: ROOT PATH START END\",\n+        ),\n+        (\n+            vec![\"read\", \".\", \"file\", \"1\"],\n+            \"read expects 4 arguments: ROOT PATH START END\",\n+        ),\n+        (\n+            vec![\"read\", \".\", \"file\", \"1\", \"1\", \"extra\"],\n+            \"read expects 4 arguments: ROOT PATH START END\",\n+        ),\n+    ] {\n+        let out = run(&args);\n+        assert_eq!(out.status.code(), Some(2), \"{args:?}\");\n+        assert!(out.stdout.is_empty(), \"{args:?}\");\n+        assert_eq!(\n+            String::from_utf8(out.stderr).unwrap(),\n+            format!(\"{{\\\"error\\\":{{\\\"code\\\":\\\"usage\\\",\\\"message\\\":\\\"{message}\\\"}}}}\\n\"),\n+            \"{args:?}\"\n+        );\n+    }\n+}\n"
+      }
+    }
+  },
+  "wrong": [
+    {
+      "name": "generic search wrong-arity refusal",
+      "scenario": "Refuse wrong-arity search invocations",
+      "step": "Then cli-arity-refusals-name-command: the usage refusal identifies \"search\" and expects 2 arguments",
+      "files": {
+        "src/main.rs": {
+          "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -176,10 +176,7 @@\n                 &args[4].to_string_lossy(),\n             )\n         }\n-        Some(\"search\") => Err(Refusal::new(\n-            \"usage\",\n-            \"search expects 2 arguments: ROOT LITERAL\",\n-        )),\n+        Some(\"search\") => Err(usage()),\n         Some(\"read\") => Err(Refusal::new(\n             \"usage\",\n             \"read expects 4 arguments: ROOT PATH START END\",\n"
+        }
+      }
+    },
+    {
+      "name": "generic read wrong-arity refusal",
+      "scenario": "Refuse wrong-arity read invocations",
+      "step": "Then cli-arity-refusals-name-command: the usage refusal identifies \"read\" and expects 4 arguments",
+      "files": {
+        "src/main.rs": {
+          "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -180,10 +180,7 @@\n             \"usage\",\n             \"search expects 2 arguments: ROOT LITERAL\",\n         )),\n-        Some(\"read\") => Err(Refusal::new(\n-            \"usage\",\n-            \"read expects 4 arguments: ROOT PATH START END\",\n-        )),\n+        Some(\"read\") => Err(usage()),\n         Some(\"request\" | \"version\" | \"help\" | \"--help\" | \"-h\") => Err(usage()),\n         _ => match args.first() {\n             None => Err(usage()),\n"
+        }
+      }
+    },
+    {
+      "name": "reject valid search arity",
+      "scenario": "Preserve successful search output",
+      "step": "Then cli-arity-refusals-name-command: the command succeeds with this output",
+      "files": {
+        "src/main.rs": {
+          "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -150,7 +150,7 @@\n fn run(args: &[std::ffi::OsString]) -> Result<String, Refusal> {\n     let usage = || Refusal::new(\"usage\", USAGE);\n     match args.first().and_then(|a| a.to_str()) {\n-        Some(\"search\") if args.len() == 3 => {\n+        Some(\"search\") if args.len() == 4 => {\n             let Some(literal) = args[2].to_str() else {\n                 return Err(Refusal::new(\n                     \"usage\",\n"
+        }
+      }
+    },
+    {
+      "name": "reject valid read arity",
+      "scenario": "Preserve successful read output",
+      "step": "Then cli-arity-refusals-name-command: the command succeeds with this output",
+      "files": {
+        "src/main.rs": {
+          "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -165,7 +165,7 @@\n             }\n             search(Path::new(&args[1]), literal)\n         }\n-        Some(\"read\") if args.len() == 5 => {\n+        Some(\"read\") if args.len() == 6 => {\n             let Some(path) = args[2].to_str() else {\n                 return Err(Refusal::new(\"usage\", \"the read path is not valid UTF-8\"));\n             };\n"
+        }
+      }
+    },
+    {
+      "name": "change unknown-command refusal wording",
+      "scenario": "Preserve other usage refusals",
+      "step": "Then cli-arity-refusals-name-command: the usage refusal is",
+      "files": {
+        "src/main.rs": {
+          "patch": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -189,7 +189,7 @@\n             None => Err(usage()),\n             Some(word) => Err(Refusal::new(\n                 \"usage\",\n-                format!(\"unknown command: {}; {USAGE}\", word.to_string_lossy()),\n+                format!(\"unrecognized command: {}; {USAGE}\", word.to_string_lossy()),\n             )),\n         },\n     }\n"
+        }
+      }
+    }
+  ]
+}

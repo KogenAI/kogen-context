@@ -176,7 +176,9 @@ fn run(args: &[std::ffi::OsString]) -> Result<String, Refusal> {
                 &args[4].to_string_lossy(),
             )
         }
-        Some("search" | "read" | "request" | "version" | "help" | "--help" | "-h") => Err(usage()),
+        Some("search") => Err(Refusal::new("usage", "search expects 2 arguments")),
+        Some("read") => Err(Refusal::new("usage", "read expects 4 arguments")),
+        Some("request" | "version" | "help" | "--help" | "-h") => Err(usage()),
         _ => match args.first() {
             None => Err(usage()),
             Some(word) => Err(Refusal::new(
