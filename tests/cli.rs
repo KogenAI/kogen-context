@@ -154,6 +154,17 @@ fn refusal(out: &Output) -> (String, String) {
 }
 
 #[test]
+fn read_refuses_directory_with_supplied_path() {
+    let c = Checkout::new("read-directory");
+    fs::create_dir(c.root().join("notes")).unwrap();
+    let root = c.root();
+    let supplied_path = "./notes";
+    let (code, message) = refusal(&run(&["read", path_str(&root), supplied_path, "1", "1"]));
+    assert_eq!(code, "not_a_file");
+    assert_eq!(message, format!("not a regular file: {supplied_path}"));
+}
+
+#[test]
 fn read_refuses_invalid_utf8_as_not_text() {
     let c = Checkout::new("read-not-text");
     c.write("broken-encoding.txt", b"\xff\xfe\n");
