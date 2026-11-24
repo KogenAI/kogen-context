@@ -641,3 +641,42 @@ fn schema_refusals_name_the_offending_field() {
         );
     }
 }
+
+#[test]
+fn invalid_utf8_request_returns_a_non_disclosing_error_packet() {
+    let request = b"{\"version\":1,\"root\":\"private-input-marker-\xff\"}";
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kogen-context"))
+        .arg("request")
+        .current_dir(repo())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("cannot run kogen-context");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(request)
+        .expect("cannot write the raw request");
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty(), "stderr: {:?}", output.stderr);
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout must be UTF-8");
+    // parse_json consumes all input, so a second packet also fails this check.
+    let packet = parse_json(stdout).expect("stdout must contain exactly one JSON packet");
+    assert_valid(
+        "invalid UTF-8 refusal",
+        "contract/packet.schema.json",
+        &load("contract/packet.schema.json"),
+        &packet,
+    );
+    // Compare the entire packet, not only its message: request data must not
+    // leak through extra members either, even as escaped or lossy UTF-8.
+    let expected = parse_json(
+        r#"{"version":1,"error":{"code":"invalid_request","message":"request is not one valid JSON object"}}"#,
+    )
+    .unwrap();
+    assert_eq!(packet, expected);
+}
