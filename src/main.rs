@@ -297,13 +297,34 @@ fn relative_string(path: &Path) -> String {
 /// `root`, in bytewise path order, with the `lstat` of its directory entry
 /// when `with_meta` is set.
 pub(crate) fn walk_files(root: &Path, with_meta: bool) -> Vec<(String, Option<fs::Metadata>)> {
+    walk_files_inner(root, with_meta, false).unwrap()
+}
+
+fn walk_files_inner(
+    root: &Path,
+    with_meta: bool,
+    strict: bool,
+) -> Result<Vec<(String, Option<fs::Metadata>)>, Refusal> {
     let mut files = Vec::new();
     let mut pending: Vec<(PathBuf, String)> = vec![(root.to_path_buf(), String::new())];
     while let Some((dir, prefix)) = pending.pop() {
-        let Ok(entries) = fs::read_dir(&dir) else {
-            continue;
+        let error = |error| {
+            Refusal::new(
+                "io_error",
+                format!("cannot enumerate directory: {}: {error}", dir.display()),
+            )
         };
-        for entry in entries.flatten() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if strict => return Err(error(err)),
+            Err(_) => continue,
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) if strict => return Err(error(err)),
+                Err(_) => continue,
+            };
             let Ok(name) = entry.file_name().into_string() else {
                 continue;
             };
@@ -330,24 +351,28 @@ pub(crate) fn walk_files(root: &Path, with_meta: bool) -> Vec<(String, Option<fs
         }
     }
     files.sort_by(|a, b| a.0.cmp(&b.0));
-    files
+    Ok(files)
 }
 
 /// Repo-relative paths of every regular file that a search of `literal`
 /// under the canonical `root` must read: all of them, less the files that
 /// the index shows cannot match.
 pub(crate) fn files_to_search(root: &Path, literal: &str) -> Vec<String> {
-    match index::open(root, literal) {
-        Some(overlay) => walk_files(root, true)
-            .into_iter()
-            .filter(|(rel, meta)| !meta.as_ref().is_some_and(|m| overlay.skips(rel, m)))
-            .map(|(rel, _)| rel)
-            .collect(),
-        None => walk_files(root, false)
-            .into_iter()
-            .map(|(rel, _)| rel)
-            .collect(),
-    }
+    files_to_search_inner(root, literal, false).unwrap()
+}
+
+fn files_to_search_inner(root: &Path, literal: &str, strict: bool) -> Result<Vec<String>, Refusal> {
+    let overlay = index::open(root, literal);
+    let files = walk_files_inner(root, overlay.is_some(), strict)?;
+    Ok(files
+        .into_iter()
+        .filter(|(rel, meta)| {
+            !overlay
+                .as_ref()
+                .is_some_and(|overlay| meta.as_ref().is_some_and(|m| overlay.skips(rel, m)))
+        })
+        .map(|(rel, _)| rel)
+        .collect())
 }
 
 /// The first `max_matches` matching lines as JSON objects, and whether more
@@ -358,10 +383,20 @@ fn find_matches(
     max_matches: usize,
     max_chars: usize,
 ) -> Result<(Vec<String>, bool), Refusal> {
+    find_matches_inner(root, literal, max_matches, max_chars, false)
+}
+
+fn find_matches_inner(
+    root: &Path,
+    literal: &str,
+    max_matches: usize,
+    max_chars: usize,
+    strict: bool,
+) -> Result<(Vec<String>, bool), Refusal> {
     let root = checkout_root(root)?;
     let mut matches = Vec::new();
     let mut truncated = false;
-    'files: for rel in files_to_search(&root, literal) {
+    'files: for rel in files_to_search_inner(&root, literal, strict)? {
         let Some(content) = fs::File::open(root.join(&rel))
             .ok()
             .and_then(read_utf8_blocks)
@@ -389,7 +424,8 @@ fn find_matches(
 }
 
 fn search(root: &Path, literal: &str) -> Result<String, Refusal> {
-    let (matches, truncated) = find_matches(root, literal, MAX_MATCHES, MAX_TEXT_CHARS)?;
+    let (matches, truncated) =
+        find_matches_inner(root, literal, MAX_MATCHES, MAX_TEXT_CHARS, true)?;
     Ok(format!(
         "{{\"query\":{},\"matches\":[{}],\"truncated\":{}}}",
         json_string(literal),

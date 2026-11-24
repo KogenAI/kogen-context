@@ -65,6 +65,69 @@ fn search_orders_paths_bytewise_and_skips_unreadable_content() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn search_refuses_unenumerable_nested_directory() {
+    use std::os::unix::fs::PermissionsExt;
+    let c = Checkout::new("search-locked-directory");
+    c.write("app/locked/notes.txt", b"parse_config\n");
+    c.write("app.py", b"x = parse_config()\n");
+    let dir = c.root().join("app/locked");
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+    let denied = fs::read_dir(&dir).is_err();
+    let out = denied.then(|| run(&["search", path_str(&c.root()), "parse_config"]));
+    let requests = denied.then(|| {
+        use std::io::Write;
+        use std::process::Stdio;
+        ["path", "ranked"].map(|order| {
+            let mut child = Command::new(env!("CARGO_BIN_EXE_kogen-context"))
+                .arg("request")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            write!(child.stdin.take().unwrap(),
+                "{{\"version\":1,\"root\":{:?},\"operation\":\"search\",\"literal\":\"parse_config\",\"order\":\"{}\"}}",
+                path_str(&c.root()), order).unwrap();
+            child.wait_with_output().unwrap()
+        })
+    });
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    if let Some(out) = out {
+        let (code, message) = refusal(&out);
+        assert_eq!(code, "io_error");
+        assert!(message.contains("app/locked"));
+    }
+    if let Some(requests) = requests {
+        for request in requests {
+            let packet = stdout(&request);
+            assert!(packet.contains("\"path\":\"app.py\""), "{packet}");
+            assert!(!packet.contains("\"error\""), "{packet}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn search_skips_unreadable_regular_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let c = Checkout::new("search-locked-file");
+    c.write("app/secret.txt", b"parse_config\n");
+    c.write("app/visible.txt", b"x = parse_config()\n");
+    let file = c.root().join("app/secret.txt");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+    let denied = fs::File::open(&file).is_err();
+    let out = denied.then(|| run(&["search", path_str(&c.root()), "parse_config"]));
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    if let Some(out) = out {
+        assert_eq!(
+            stdout(&out),
+            "{\"query\":\"parse_config\",\"matches\":[{\"path\":\"app/visible.txt\",\"line\":1,\"column\":5,\"text\":\"x = parse_config()\"}],\"truncated\":false}\n"
+        );
+    }
+}
+
 #[test]
 fn search_skips_regular_git_file_without_hiding_siblings() {
     let c = Checkout::new("git-file");

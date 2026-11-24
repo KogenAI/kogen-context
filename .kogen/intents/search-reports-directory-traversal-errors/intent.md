@@ -1,0 +1,37 @@
+# Report search directory enumeration failures
+
+Slug: search-reports-directory-traversal-errors
+Model: not applicable — one stateless command outcome, with no persistent state or transitions added
+Acceptance:
+- .kogen/intents/search-reports-directory-traversal-errors/acceptance.feature
+- features/steps/search-reports-directory-traversal-errors__steps.js
+
+When `kogen-context search ROOT LITERAL` cannot enumerate a directory it is supposed to search, refuse the search instead of reporting matches from an incomplete tree. The refusal is exit status 1, empty stdout and one newline-terminated JSON object on stderr, `{"error":{"code":"io_error","message":<string>}}`. The message names the actual directory whose enumeration failed. This applies after normal root validation, including to descendants of a valid, accessible root. An error opening the directory or retrieving an entry from the enumeration fails the search even if there are matches outside that directory. File-open and file-read failures and non-text content still skip only the affected file.
+
+Implementation scope: `src/main.rs` and `tests/cli.rs` only. Do not change the searchable file set, symlink policy, read errors, or existing search result fields, limits, matching and order. Preserve the indexed and direct scan routes of the CLI search. No change to the separate version 1 `request` interface or the cache-snapshot builder is specified.
+
+## Decisions
+- Replace silent omission at the unversioned search's directory enumeration boundary with `io_error` naming the affected directory; use the existing CLI refusal envelope, output stream and status. The wording and OS error text are not asserted. (evidence: src/main.rs; tests/cli.rs) (source: request)
+- Make the actual file-list walk used by the unversioned search report enumeration errors, not a separate root or directory preflight. Preserve the existing regular-file and directory filtering and file-open/read/decode skip behavior. An optional cache overlay must not suppress a traversal error or affect success ordering. (evidence: src/main.rs; src/index.rs; README.md) (source: request)
+- Interpret the requested two-file scope as the unversioned CLI search boundary. Retain the existing best-effort traversal policy for the version 1 request callers and for the optional index snapshot builder. The version 1 packet schema does not list `io_error`. (evidence: src/main.rs; src/index.rs; src/request.rs; src/rank.rs; contract/packet.schema.json) (assumption: The requested I/O refusal is for `kogen-context search ROOT LITERAL`; extending the versioned packet error contract is outside this Intent.) (source: request)
+- Use real filesystem denial and the actual Cargo-built CLI. Run permission-based acceptance as an unprivileged Unix user on a filesystem enforcing mode bits; setup verifies denial explicitly and restores permissions for cleanup. Native permission tests may guard on a direct access probe where the OS grants access despite the mode. (evidence: tests/cli.rs; features/steps/README.md; .kogen/project.yaml) (source: request)
+
+## Source comparison
+- Addressed: ev-e2953a4c describes `src/main.rs::walk_files` continuing after `read_dir` fails. The first scenario exercises that path with an existing nested directory in an accessible root and a matching accessible sibling; it checks the literal `io_error`, the nested directory name, and no success output. A missing-root-only fix does not pass it.
+- Addressed: acceptance 2 and README.md's default path order are preserved by the accessible-tree scenario, which compares the entire ordered match array and success envelope. Both blanket refusal and an ordering change are rejected.
+- Addressed: acceptance 3 and the existing `tests/cli.rs` skip semantics are represented by genuinely denied regular-file content and invalid UTF-8 containing the literal, alongside an accessible match. Treating file-open failures or non-text files as fatal is rejected.
+- Addressed: source scope stays `src/main.rs` and `tests/cli.rs`; searchable files (including ignored files), symlink traversal and `read` errors are unchanged. The accessible-tree scenario includes a Git-ignored file, excludes Git metadata and excludes both file and directory symlinks. The regular-file scenario checks the unchanged `read` refusal codes and affected paths after checking that search succeeds. `contract/README.md` describes search/request parity and `contract/packet.schema.json` omits `io_error`; this Intent preserves existing version 1 packets rather than extending the schema. The new refusal is an intentional CLI-only exception to parity on enumeration failure, not a change to normal search results or index policy.
+
+## Tests
+- Directory enumeration failure is not successful partial search: add a Unix CLI regression in `tests/cli.rs` exercising permission denial in a nested directory with an accessible matching sibling and asserting the exit status, error code, affected directory, and no stdout (regression)
+- Accessible trees keep the matching lines and order: retain `search_orders_paths_bytewise_and_skips_unreadable_content` and run the accessible-tree CLI scenario (existing)
+- Unreadable individual files remain skipped: add a Unix CLI regression in `tests/cli.rs` with a mode-000 regular file and an accessible matching sibling (integration)
+- Non-text files remain skipped: retain `search_orders_paths_bytewise_and_skips_unreadable_content` and run the regular-file CLI scenario (existing)
+- Search still includes ignored files and excludes `.git` and symlinks: exercise the existing discovery policy in the accessible-tree CLI scenario (scenario)
+- Read still distinguishes inaccessible files from non-text content: retain `read_refuses_unreadable_file_as_io_error` and `read_refuses_invalid_utf8_as_not_text` and check the same refusals through the CLI scenario (existing)
+- none: Directory search necessarily enumerates candidates as the tree grows; this fix adds no collection data-store or external-service calls to bound.
+
+## Feasibility
+- `cargo --version` confirmed the pinned 1.99.1 toolchain on the unprivileged Darwin host (probe: exit 0). A scratch `cargo build --locked --offline` and nested mode-000 fixture confirmed `EACCES` from enumeration and successful partial results from the unchanged `search` binary (probe: exit 0). The observed CLI stdout line, followed by LF, was `{"query":"parse_config","matches":[{"path":"app.py","line":1,"column":5,"text":"x = parse_config()"}],"truncated":false}`.
+- `cargo test --locked --offline --test cli search_orders_paths_bytewise_and_skips_unreadable_content -- --exact` ran the existing normal-order/non-text regression successfully (probe: exit 0, one test passed). The observer qualification command ran both controls with their declared polarity (probe: exit 0 after verifying both statuses). The generated implementation controls are scratch-only patches, not production edits.
+- evidence: {"id":"cli-search-observers","kind":"observer","inputs":["features/steps/search-reports-directory-traversal-errors__steps.js"],"observers":["features/steps/search-reports-directory-traversal-errors__steps.js"],"checks":[{"name":"good","command":"\"$KOGEN_NODE\" features/steps/search-reports-directory-traversal-errors__steps.js good","exit":0,"output":"search observers accepted both valid outcomes\n"},{"name":"bad","command":"\"$KOGEN_NODE\" features/steps/search-reports-directory-traversal-errors__steps.js bad","exit":1,"output":"search observers rejected all invalid outcomes\n"}]}
