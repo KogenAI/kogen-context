@@ -440,6 +440,21 @@ fn assert_valid(label: &str, schema_file: &str, schema: &Value, value: &Value) {
 }
 
 #[test]
+fn failed_read_packet_validates_against_packet_schema() {
+    let schema = load("contract/packet.schema.json");
+    let packet = parse_json(
+        r#"{"version":1,"error":{"code":"io_error","message":"cannot read file: mem: Input/output error"}}"#,
+    )
+    .unwrap();
+    assert_valid(
+        "failed read",
+        "contract/packet.schema.json",
+        &schema,
+        &packet,
+    );
+}
+
+#[test]
 fn validator_rejects_a_known_bad_packet() {
     let schema = load("contract/packet.schema.json");
     let bad = parse_json(r#"{"version":1,"error":{"code":"usage","message":"x"}}"#).unwrap();
