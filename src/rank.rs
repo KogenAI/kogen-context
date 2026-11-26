@@ -128,7 +128,7 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
         "//"
     };
     let trimmed = line.trim_start_matches(is_blank);
-    if before.contains(marker)
+    if has_marker_outside_string(before, marker)
         || (marker != "#" && (trimmed.starts_with("/*") || trimmed.starts_with('*')))
     {
         return LineKind::Comment;
@@ -140,6 +140,30 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
     } else {
         LineKind::Reference
     }
+}
+
+/// Whether `marker` occurs in `text` outside a double-quoted string. A string
+/// is opened by `"` and closed by an unescaped `"`; a backslash escapes the
+/// character after it inside a string.
+fn has_marker_outside_string(text: &str, marker: &str) -> bool {
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, c) in text.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_string = false;
+            }
+        } else if c == '"' {
+            in_string = true;
+        } else if text[index..].starts_with(marker) {
+            return true;
+        }
+    }
+    false
 }
 
 fn is_definition(before: &str, after: &str) -> bool {
@@ -363,6 +387,21 @@ mod tests {
         assert_eq!(kind("py", " * spin", "spin"), LineKind::Reference);
         assert_eq!(kind("py", "/* spin", "spin"), LineKind::Reference);
         assert_eq!(kind("sh", "echo '# spin'", "spin"), LineKind::Comment);
+        assert_eq!(
+            kind("go", "log.Println(\"// spin\")", "spin"),
+            LineKind::Reference
+        );
+        assert_eq!(kind("go", "f(\"//\", spin(1))", "spin"), LineKind::Call);
+        assert_eq!(
+            kind("go", "f(\"a\\\"// \") // spin", "spin"),
+            LineKind::Comment
+        );
+        assert_eq!(kind("go", "f(\"x\") // spin", "spin"), LineKind::Comment);
+        assert_eq!(kind("py", "x = \"# \" + spin", "spin"), LineKind::Reference);
+        assert_eq!(
+            kind("lua", "x = \"-- \" .. spin", "spin"),
+            LineKind::Reference
+        );
         for hash in [
             "pyi", "rb", "sh", "bash", "zsh", "fish", "pl", "pm", "r", "jl", "ex", "exs", "nim",
             "ps1",
