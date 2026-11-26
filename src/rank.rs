@@ -31,6 +31,7 @@ const DASH_COMMENT_EXTENSIONS: &[&str] = &["lua", "sql", "hs"];
 const DEFINITION_KEYWORDS: &[&str] = &[
     "fn",
     "func",
+    "fun",
     "def",
     "function",
     "class",
@@ -448,6 +449,9 @@ mod tests {
                 "{definition}"
             );
         }
+        for extension in ["kt", "kts"] {
+            assert_eq!(kind(extension, "fun spin()", "spin"), LineKind::Definition);
+        }
         for keyword in DEFINITION_KEYWORDS {
             let line = format!("{keyword} spin;");
             assert_eq!(kind("go", &line, "spin"), LineKind::Definition, "{line}");
@@ -488,6 +492,16 @@ mod tests {
 
     #[test]
     fn calls() {
+        for extension in ["kt", "kts"] {
+            assert_eq!(
+                kind(extension, "val result = spin()", "spin"),
+                LineKind::Call
+            );
+            assert_eq!(
+                kind(extension, "val display = \"fun\" + spin()", "spin"),
+                LineKind::Call
+            );
+        }
         assert_eq!(kind("go", "x := spin(5)", "spin"), LineKind::Call);
         assert_eq!(kind("go", "x := spin (5)", "spin"), LineKind::Call);
         assert_eq!(kind("go", "x := spin\t\t(5)", "spin"), LineKind::Call);

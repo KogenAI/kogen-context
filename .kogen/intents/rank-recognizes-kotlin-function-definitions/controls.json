@@ -1,0 +1,41 @@
+{
+  "correct": {
+    "files": {
+      "src/rank.rs": {
+        "patch": "--- a/src/rank.rs\n+++ b/src/rank.rs\n@@ -30,6 +30,7 @@\n const DASH_COMMENT_EXTENSIONS: &[&str] = &[\"lua\", \"sql\", \"hs\"];\n const DEFINITION_KEYWORDS: &[&str] = &[\n     \"fn\",\n+    \"fun\",\n     \"func\",\n     \"def\",\n     \"function\",\n"
+      }
+    }
+  },
+  "wrong": [
+    {
+      "name": "omit fun from the definition keywords",
+      "scenario": "A Kotlin source declaration ranks before calls and references",
+      "step": "Then rank-recognizes-kotlin-function-definitions: the matching lines of \"Spin.kt\" are \"4, 2, 3, 1\" in that order",
+      "files": {
+        "src/rank.rs": {
+          "patch": "--- a/src/rank.rs\n+++ b/src/rank.rs\n@@ -30,7 +30,6 @@\n const DASH_COMMENT_EXTENSIONS: &[&str] = &[\"lua\", \"sql\", \"hs\"];\n const DEFINITION_KEYWORDS: &[&str] = &[\n     \"fn\",\n-    \"fun\",\n     \"func\",\n     \"def\",\n     \"function\",\n"
+        }
+      }
+    },
+    {
+      "name": "promote any Kotlin source line containing fun",
+      "scenario": "A Kotlin source declaration ranks before calls and references",
+      "step": "Then rank-recognizes-kotlin-function-definitions: the matching lines of \"Spin.kt\" are \"4, 2, 3, 1\" in that order",
+      "files": {
+        "src/rank.rs": {
+          "patch": "--- a/src/rank.rs\n+++ b/src/rank.rs\n@@ -134,7 +134,9 @@\n     {\n         return LineKind::Comment;\n     }\n-    if is_definition(before, after) {\n+    if (matches!(extension, \"kt\" | \"kts\") && line.contains(\"fun\"))\n+        || is_definition(before, after)\n+    {\n         LineKind::Definition\n     } else if after.trim_start_matches(is_blank).starts_with('(') {\n         LineKind::Call\n"
+        }
+      }
+    },
+    {
+      "name": "promote any Kotlin source line containing spin",
+      "scenario": "A Kotlin source declaration ranks before calls and references",
+      "step": "Then rank-recognizes-kotlin-function-definitions: the matching lines of \"Spin.kt\" are \"4, 2, 3, 1\" in that order",
+      "files": {
+        "src/rank.rs": {
+          "patch": "--- a/src/rank.rs\n+++ b/src/rank.rs\n@@ -134,7 +134,9 @@\n     {\n         return LineKind::Comment;\n     }\n-    if is_definition(before, after) {\n+    if (matches!(extension, \"kt\" | \"kts\") && line.contains(\"spin\"))\n+        || is_definition(before, after)\n+    {\n         LineKind::Definition\n     } else if after.trim_start_matches(is_blank).starts_with('(') {\n         LineKind::Call\n"
+        }
+      }
+    }
+  ]
+}
