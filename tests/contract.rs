@@ -695,3 +695,52 @@ fn invalid_utf8_request_returns_a_non_disclosing_error_packet() {
     .unwrap();
     assert_eq!(packet, expected);
 }
+
+#[test]
+fn request_input_size_boundary() {
+    const LIMIT: usize = 1024 * 1024;
+    let request = r#"{"version":1,"root":"contract/examples/checkout","operation":"search","literal":"request-size-sentinel-é-9f21"}"#;
+    let path = std::env::temp_dir().join(format!("kogen-request-size-{}", std::process::id()));
+    let run = |size: usize| {
+        let mut input = request.as_bytes().to_vec();
+        input.resize(size, b' ');
+        fs::write(&path, input).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_kogen-context"))
+            .arg("request")
+            .current_dir(repo())
+            .stdin(fs::File::open(&path).unwrap())
+            .output()
+            .unwrap();
+        assert!(output.stderr.is_empty());
+        output
+    };
+    let baseline = run(request.len());
+    assert_eq!(baseline.status.code(), Some(0));
+    let expected = parse_json(std::str::from_utf8(&baseline.stdout).unwrap()).unwrap();
+    for size in [LIMIT - 1, LIMIT] {
+        let output = run(size);
+        assert_eq!(output.status.code(), Some(0), "size {size}");
+        assert_eq!(
+            parse_json(std::str::from_utf8(&output.stdout).unwrap()).unwrap(),
+            expected
+        );
+    }
+    for size in [LIMIT + 1, LIMIT * 2] {
+        let output = run(size);
+        assert_eq!(output.status.code(), Some(2), "size {size}");
+        let text = std::str::from_utf8(&output.stdout).unwrap();
+        let packet = parse_json(text).expect("one JSON packet");
+        assert_valid(
+            "oversized refusal",
+            "contract/packet.schema.json",
+            &load("contract/packet.schema.json"),
+            &packet,
+        );
+        assert_eq!(
+            packet.member("error").and_then(|e| e.member("code")),
+            Some(&Value::String("invalid_request".into()))
+        );
+        assert!(!text.contains("request-size-sentinel-é-9f21"));
+    }
+    fs::remove_file(path).unwrap();
+}

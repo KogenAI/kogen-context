@@ -35,10 +35,21 @@ enum Request {
 /// Reads the request from standard input, writes the packet to standard
 /// output and returns the exit status for it.
 pub fn serve_stdin() -> ExitCode {
+    const MAX_INPUT_BYTES: usize = 1024 * 1024;
     let mut input = Vec::new();
     // A failed read leaves a partial or empty input, which is no valid request.
-    let read_ok = std::io::stdin().read_to_end(&mut input).is_ok();
-    let (packet, status) = respond(if read_ok { &input } else { b"" });
+    let read_ok = std::io::stdin()
+        .take((MAX_INPUT_BYTES + 1) as u64)
+        .read_to_end(&mut input)
+        .is_ok();
+    let (packet, status) = if input.len() > MAX_INPUT_BYTES {
+        (
+            "{\"version\":1,\"error\":{\"code\":\"invalid_request\",\"message\":\"request exceeds the input size limit\"}}".to_string(),
+            2,
+        )
+    } else {
+        respond(if read_ok { &input } else { b"" })
+    };
     // The packet is the only output of `request`: when it cannot be written,
     // stderr stays empty as well.
     if write_line(&packet) {

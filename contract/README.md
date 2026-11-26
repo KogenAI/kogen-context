@@ -8,7 +8,7 @@ This directory pins the contract that callers of `kogen-context` use. Callers ru
 kogen-context request < request.json
 ```
 
-`request` takes no further argument; any other argument is the usage refusal of the `search` and `read` commands. The command reads standard input to its end.
+`request` takes no further argument; any other argument is the usage refusal of the `search` and `read` commands. The command accepts at most 1 MiB (1048576 bytes) of standard input, including JSON whitespace. Larger input is refused with an `invalid_request` packet and exit status 2, without echoing input bytes.
 
 Every outcome, success or refusal, is exactly one compact JSON packet on stdout followed by `\n`; stderr stays empty.
 
