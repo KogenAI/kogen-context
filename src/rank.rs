@@ -129,7 +129,9 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
         "//"
     };
     let trimmed = line.trim_start_matches(is_blank);
+    // PHP takes `#` as well as `//`.
     if has_marker_outside_string(before, marker)
+        || (extension == "php" && has_marker_outside_string(before, "#"))
         || (marker != "#" && (trimmed.starts_with("/*") || trimmed.starts_with('*')))
     {
         return LineKind::Comment;
@@ -417,6 +419,17 @@ mod tests {
             assert_eq!(kind(dash, " /* spin", "spin"), LineKind::Comment, "{dash}");
             assert_eq!(kind(dash, "* spin", "spin"), LineKind::Comment, "{dash}");
         }
+        assert_eq!(kind("php", "# spin", "spin"), LineKind::Comment);
+        assert_eq!(kind("php", "$x = 1; # spin", "spin"), LineKind::Comment);
+        assert_eq!(kind("php", "// spin", "spin"), LineKind::Comment);
+        assert_eq!(kind("php", " /* spin", "spin"), LineKind::Comment);
+        assert_eq!(kind("php", " * spin", "spin"), LineKind::Comment);
+        assert_eq!(
+            kind("php", "$x = \"# \" . spin;", "spin"),
+            LineKind::Reference
+        );
+        assert_eq!(kind("php", "spin($x);", "spin"), LineKind::Call);
+        assert_eq!(kind("php", "$x = spin;", "spin"), LineKind::Reference);
         for slash in [
             "c", "rs", "zig", "ts", "java", "php", "swift", "erl", "ml", "dart",
         ] {
