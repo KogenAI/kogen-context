@@ -130,8 +130,8 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
     };
     let trimmed = line.trim_start_matches(is_blank);
     // PHP takes `#` as well as `//`.
-    if has_marker_outside_string(before, marker)
-        || (extension == "php" && has_marker_outside_string(before, "#"))
+    if has_marker_outside_string(before, marker, HASH_COMMENT_EXTENSIONS.contains(&extension))
+        || (extension == "php" && has_marker_outside_string(before, "#", false))
         || (marker != "#" && (trimmed.starts_with("/*") || trimmed.starts_with('*')))
     {
         return LineKind::Comment;
@@ -145,23 +145,22 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
     }
 }
 
-/// Whether `marker` occurs in `text` outside a double-quoted string. A string
-/// is opened by `"` and closed by an unescaped `"`; a backslash escapes the
-/// character after it inside a string.
-fn has_marker_outside_string(text: &str, marker: &str) -> bool {
-    let mut in_string = false;
+/// Whether `marker` occurs outside a quoted string. Backslashes escape the
+/// following character inside either enabled kind of string.
+fn has_marker_outside_string(text: &str, marker: &str, single_quotes: bool) -> bool {
+    let mut quote = None;
     let mut escaped = false;
     for (index, c) in text.char_indices() {
-        if in_string {
+        if let Some(delimiter) = quote {
             if escaped {
                 escaped = false;
             } else if c == '\\' {
                 escaped = true;
-            } else if c == '"' {
-                in_string = false;
+            } else if c == delimiter {
+                quote = None;
             }
-        } else if c == '"' {
-            in_string = true;
+        } else if c == '"' || (single_quotes && c == '\'') {
+            quote = Some(c);
         } else if text[index..].starts_with(marker) {
             return true;
         }
@@ -389,7 +388,21 @@ mod tests {
         );
         assert_eq!(kind("py", " * spin", "spin"), LineKind::Reference);
         assert_eq!(kind("py", "/* spin", "spin"), LineKind::Reference);
-        assert_eq!(kind("sh", "echo '# spin'", "spin"), LineKind::Comment);
+        assert_eq!(kind("sh", "echo '# spin'", "spin"), LineKind::Reference);
+        assert_eq!(kind("py", "x = '# spin'", "spin"), LineKind::Reference);
+        assert_eq!(kind("sh", "echo 'a' # spin", "spin"), LineKind::Comment);
+        assert_eq!(kind("py", "x = '\"# spin'", "spin"), LineKind::Reference);
+        assert_eq!(kind("py", "x = \"'# spin\"", "spin"), LineKind::Reference);
+        assert_eq!(
+            kind("sh", "echo 'a\\' # spin'", "spin"),
+            LineKind::Reference
+        );
+        assert_eq!(
+            kind("rs", "let r: &'a str = y; // spin", "spin"),
+            LineKind::Comment
+        );
+        assert_eq!(kind("php", "$x = ' # spin", "spin"), LineKind::Comment);
+        assert_eq!(kind("lua", "x = ' -- spin", "spin"), LineKind::Comment);
         assert_eq!(
             kind("go", "log.Println(\"// spin\")", "spin"),
             LineKind::Reference
