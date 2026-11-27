@@ -130,9 +130,9 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
     };
     let trimmed = line.trim_start_matches(is_blank);
     // PHP takes `#` as well as `//`.
-    if has_marker_outside_string(before, marker, HASH_COMMENT_EXTENSIONS.contains(&extension))
-        || (extension == "php" && has_marker_outside_string(before, "#", false))
-        || (marker != "#" && (trimmed.starts_with("/*") || trimmed.starts_with('*')))
+    if (marker == "#" && has_marker_outside_string(before, marker, true))
+        || (marker != "#"
+            && (trimmed.starts_with('*') || in_comment(before, marker, extension == "php")))
     {
         return LineKind::Comment;
     }
@@ -143,6 +143,40 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
     } else {
         LineKind::Reference
     }
+}
+
+/// Scan the prefix up to the match, ignoring comment markers in strings and
+/// line-comment markers inside block comments.
+fn in_comment(text: &str, marker: &str, php: bool) -> bool {
+    let mut chars = text.char_indices().peekable();
+    let mut quoted = false;
+    let mut escaped = false;
+    let mut block = false;
+    while let Some((index, c)) = chars.next() {
+        let rest = &text[index..];
+        if block {
+            if rest.starts_with("*/") {
+                block = false;
+                chars.next();
+            }
+        } else if quoted {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                quoted = false;
+            }
+        } else if c == '"' {
+            quoted = true;
+        } else if rest.starts_with(marker) || (php && c == '#') {
+            return true;
+        } else if rest.starts_with("/*") {
+            block = true;
+            chars.next();
+        }
+    }
+    block
 }
 
 /// Whether `marker` occurs outside a quoted string. Backslashes escape the
@@ -394,7 +428,21 @@ mod tests {
         assert_eq!(kind("go", "  /* spin */", "spin"), LineKind::Comment);
         assert_eq!(kind("go", "\t * spin", "spin"), LineKind::Comment);
         assert_eq!(kind("go", "x := 2 * spin(1)", "spin"), LineKind::Call);
-        assert_eq!(kind("c", "x /* spin", "spin"), LineKind::Reference);
+        assert_eq!(kind("c", "x /* spin", "spin"), LineKind::Comment);
+        assert_eq!(kind("c", "x /* spin */", "spin"), LineKind::Comment);
+        assert_eq!(kind("c", "spin() /* note */", "spin"), LineKind::Call);
+        assert_eq!(kind("c", "/* note */ spin()", "spin"), LineKind::Call);
+        assert_eq!(
+            kind("c", "x /* // note */ spin", "spin"),
+            LineKind::Reference
+        );
+        assert_eq!(kind("c", "x /* a */ /* spin */", "spin"), LineKind::Comment);
+        assert_eq!(kind("c", "x = \"/*\" + spin", "spin"), LineKind::Reference);
+        assert_eq!(
+            kind("c", "x = \"a\\\"/*\" + spin", "spin"),
+            LineKind::Reference
+        );
+        assert_eq!(kind("py", "x /* spin", "spin"), LineKind::Reference);
         assert_eq!(kind("py", "# spin", "spin"), LineKind::Comment);
         assert_eq!(kind("py", "x = 1  # spin", "spin"), LineKind::Comment);
         assert_eq!(
