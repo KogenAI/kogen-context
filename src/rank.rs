@@ -132,7 +132,8 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
     // PHP takes `#` as well as `//`.
     if (marker == "#" && has_marker_outside_string(before, marker, true))
         || (marker != "#"
-            && (trimmed.starts_with('*') || in_comment(before, marker, extension == "php")))
+            && (trimmed.starts_with('*')
+                || in_comment(before, marker, extension == "php", extension == "rs")))
     {
         return LineKind::Comment;
     }
@@ -147,17 +148,28 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
 
 /// Scan the prefix up to the match, ignoring comment markers in strings and
 /// line-comment markers inside block comments.
-fn in_comment(text: &str, marker: &str, php: bool) -> bool {
+fn in_comment(text: &str, marker: &str, php: bool, rust: bool) -> bool {
     let mut chars = text.char_indices().peekable();
     let mut quoted = false;
     let mut escaped = false;
     let mut block = false;
+    let mut raw_hashes = None;
     while let Some((index, c)) = chars.next() {
         let rest = &text[index..];
         if block {
             if rest.starts_with("*/") {
                 block = false;
                 chars.next();
+            }
+        } else if let Some(hashes) = raw_hashes {
+            if c == '"'
+                && rest.as_bytes()[1..].iter().take(hashes).all(|&b| b == b'#')
+                && rest.len() > hashes
+            {
+                for _ in 0..hashes {
+                    chars.next();
+                }
+                raw_hashes = None;
             }
         } else if quoted {
             if escaped {
@@ -167,6 +179,25 @@ fn in_comment(text: &str, marker: &str, php: bool) -> bool {
             } else if c == '"' {
                 quoted = false;
             }
+        } else if rust
+            && (c == 'r'
+                || ((c == 'b' || c == 'c') && (rest.starts_with("br") || rest.starts_with("cr"))))
+            && !text[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_alphanumeric() || ch == '_')
+            && let Some(after_r) = rest
+                .strip_prefix('r')
+                .or_else(|| rest.strip_prefix("br"))
+                .or_else(|| rest.strip_prefix("cr"))
+            && let hashes = after_r.bytes().take_while(|&b| b == b'#').count()
+            && after_r.as_bytes().get(hashes) == Some(&b'"')
+        {
+            let opener_len = rest.len() - after_r.len() + hashes + 1;
+            for _ in 1..opener_len {
+                chars.next();
+            }
+            raw_hashes = Some(hashes);
         } else if c == '"' {
             quoted = true;
         } else if rest.starts_with(marker) || (php && c == '#') {
@@ -462,6 +493,28 @@ mod tests {
         );
         assert_eq!(
             kind("rs", "let r: &'a str = y; // spin", "spin"),
+            LineKind::Comment
+        );
+        for line in [
+            r##"let s = r"// spin";"##,
+            r###"let s = r#"a" // spin"#;"###,
+            r###"let s = br##"a"# // spin"##;"###,
+            r###"let s = cr#"a" // spin"#;"###,
+        ] {
+            assert_eq!(kind("rs", line, "spin"), LineKind::Reference);
+        }
+        for line in [
+            r###"let s = r#"//"#; // spin"###,
+            r##"let p = r"C:\"; // spin"##,
+        ] {
+            assert_eq!(kind("rs", line, "spin"), LineKind::Comment);
+        }
+        assert_eq!(
+            kind("go", r###"x := r#"a" // spin"#"###, "spin"),
+            LineKind::Comment
+        );
+        assert_eq!(
+            kind("rs", r###"let s = fooxr#"a" // spin"#;"###, "spin"),
             LineKind::Comment
         );
         assert_eq!(kind("php", "$x = ' # spin", "spin"), LineKind::Comment);
