@@ -136,7 +136,7 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
     {
         return LineKind::Comment;
     }
-    if is_definition(before, after) {
+    if is_definition(extension, before, after) {
         LineKind::Definition
     } else if after.trim_start_matches(is_blank).starts_with('(') {
         LineKind::Call
@@ -168,17 +168,32 @@ fn has_marker_outside_string(text: &str, marker: &str, single_quotes: bool) -> b
     false
 }
 
-fn is_definition(before: &str, after: &str) -> bool {
+fn is_definition(extension: &str, before: &str, after: &str) -> bool {
     if !before.ends_with(is_blank) {
         return false;
     }
-    let head = before.trim_end_matches(is_blank);
+    let mut head = before.trim_end_matches(is_blank);
+    let mut receiver = false;
+    if extension == "go"
+        && head.ends_with(')')
+        && let Some(open) = head.rfind('(')
+    {
+        let prefix = &head[..open];
+        if prefix.ends_with(is_blank) && !head[open + 1..head.len() - 1].contains(')') {
+            head = prefix.trim_end_matches(is_blank);
+            receiver = true;
+        }
+    }
     let word_start = head
         .trim_end_matches(|c: char| c.is_ascii_alphabetic())
         .len();
     let stands_alone = head[..word_start].is_empty() || head[..word_start].ends_with(is_blank);
     stands_alone
-        && DEFINITION_KEYWORDS.contains(&&head[word_start..])
+        && if receiver {
+            &head[word_start..] == "func"
+        } else {
+            DEFINITION_KEYWORDS.contains(&&head[word_start..])
+        }
         && !after.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_')
 }
 
@@ -482,6 +497,32 @@ mod tests {
             let line = format!("{keyword} spin;");
             assert_eq!(kind("go", &line, "spin"), LineKind::Definition, "{line}");
         }
+        for line in [
+            "func (s Server) spin()",
+            "func (s *Server) spin()",
+            "func (Server) spin()",
+            "func (s *Server[T]) spin()",
+            "func\t(s Server)\tspin()",
+        ] {
+            assert_eq!(kind("go", line, "spin"), LineKind::Definition, "{line}");
+        }
+        for line in [
+            "s.spin(req)",
+            "defer func() { s.spin(1) }()",
+            "func(s S) spin()",
+            "fn (s S) spin()",
+            "struct (s S) spin()",
+        ] {
+            assert_eq!(kind("go", line, "spin"), LineKind::Call, "{line}");
+        }
+        for line in [
+            "h := s.spin",
+            "func (s *Server) spinning()",
+            "func (s S)spin",
+        ] {
+            assert_eq!(kind("go", line, "spin"), LineKind::Reference, "{line}");
+        }
+        assert_eq!(kind("rs", "func (s S) spin()", "spin"), LineKind::Call);
         assert_eq!(kind("go", "func spin", "spin"), LineKind::Definition);
         assert_eq!(kind("go", "fn spin_", "spin"), LineKind::Reference);
         assert_eq!(kind("go", "fn spin1", "spin"), LineKind::Reference);
