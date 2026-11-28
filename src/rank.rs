@@ -118,7 +118,13 @@ fn is_blank(c: char) -> bool {
 /// The kind of a line of a source, test or generated file with the extension
 /// `extension`, whose first occurrence of the literal is at byte `at` and
 /// spans `literal_len` bytes.
-fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> LineKind {
+fn line_kind(
+    extension: &str,
+    line: &str,
+    at: usize,
+    literal_len: usize,
+    mut python_quote: Option<u8>,
+) -> LineKind {
     let before = &line[..at];
     let after = &line[at + literal_len..];
     let marker = if HASH_COMMENT_EXTENSIONS.contains(&extension) {
@@ -130,7 +136,12 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
     };
     let trimmed = line.trim_start_matches(is_blank);
     // PHP takes `#` as well as `//`.
-    if (marker == "#" && has_marker_outside_string(before, marker, true))
+    if (marker == "#"
+        && if matches!(extension, "py" | "pyi") {
+            python_comment(before, &mut python_quote)
+        } else {
+            has_marker_outside_string(before, marker, true)
+        })
         || (marker != "#"
             && (trimmed.starts_with('*')
                 || in_comment(
@@ -153,6 +164,46 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
     } else {
         LineKind::Reference
     }
+}
+
+/// Scan one Python line or line prefix, carrying triple-string state between lines.
+fn python_comment(text: &str, triple: &mut Option<u8>) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut ordinary = None;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(quote) = *triple {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if bytes[i..].starts_with(&[quote, quote, quote]) {
+                *triple = None;
+                i += 3;
+                continue;
+            }
+        } else if let Some(quote) = ordinary {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == quote {
+                ordinary = None;
+            }
+        } else if c == b'#' {
+            return true;
+        } else if c == b'\'' || c == b'"' {
+            if bytes[i..].starts_with(&[c, c, c]) {
+                *triple = Some(c);
+                i += 3;
+                continue;
+            }
+            ordinary = Some(c);
+        }
+        i += 1;
+    }
+    false
 }
 
 /// Scan the prefix up to the match, ignoring comment markers in strings and
@@ -286,11 +337,17 @@ fn tier(class: FileClass, kind: LineKind) -> u8 {
 
 /// The tier of a line of a file described by `info` that contains the literal
 /// at byte `at`.
-fn tier_of_line(info: &FileInfo, line: &str, at: usize, literal_len: usize) -> u8 {
+fn tier_of_line(
+    info: &FileInfo,
+    line: &str,
+    at: usize,
+    literal_len: usize,
+    python_quote: Option<u8>,
+) -> u8 {
     let kind = if info.class == FileClass::Other {
         LineKind::Reference
     } else {
-        line_kind(&info.extension, line, at, literal_len)
+        line_kind(&info.extension, line, at, literal_len, python_quote)
     };
     tier(info.class, kind)
 }
@@ -335,17 +392,29 @@ pub fn find_ranked_matches(
             continue;
         };
         let mut info = None;
+        let python = matches!(extension_of(rel).as_deref(), Some("py" | "pyi"));
+        let mut preceding = content.split_inclusive('\n');
+        let mut scanned = 0;
+        let mut python_quote = None;
         for (number, line) in matching_lines(&content, literal) {
             let Some(at) = line.find(literal) else {
                 continue;
             };
+            if python {
+                while scanned < number - 1 {
+                    if let Some(previous) = preceding.next() {
+                        python_comment(previous, &mut python_quote);
+                    }
+                    scanned += 1;
+                }
+            }
             total += 1;
             let info = info.get_or_insert_with(|| {
                 file_info(rel, &first_lines(&content, GENERATED_MARKER_LINES))
             });
             let column = column_of(line, literal).unwrap_or(1);
             candidates.push(Candidate {
-                tier: tier_of_line(info, line, at, literal.len()),
+                tier: tier_of_line(info, line, at, literal.len(), python_quote),
                 file,
                 line: number,
                 json: format!(
@@ -376,7 +445,7 @@ mod tests {
     fn tier_in(rel: &str, lines: &[&str], line: &str, literal: &str) -> u8 {
         let info = file_info(rel, lines);
         let at = line.find(literal).unwrap();
-        tier_of_line(&info, line, at, literal.len())
+        tier_of_line(&info, line, at, literal.len(), None)
     }
 
     fn class(rel: &str, lines: &[&str]) -> FileClass {
@@ -384,7 +453,13 @@ mod tests {
     }
 
     fn kind(extension: &str, line: &str, literal: &str) -> LineKind {
-        line_kind(extension, line, line.find(literal).unwrap(), literal.len())
+        line_kind(
+            extension,
+            line,
+            line.find(literal).unwrap(),
+            literal.len(),
+            None,
+        )
     }
 
     #[test]
@@ -462,6 +537,50 @@ mod tests {
 
     #[test]
     fn comments() {
+        for extension in ["py", "pyi"] {
+            for delimiter in ["\"\"\"", "'''"] {
+                let mut state = None;
+                assert!(!python_comment(&format!("s = {delimiter}\n"), &mut state));
+                assert_eq!(
+                    line_kind(extension, "# spin", 2, 4, state),
+                    LineKind::Reference
+                );
+                let close = format!("{delimiter} # spin");
+                assert_eq!(
+                    line_kind(extension, &close, close.find("spin").unwrap(), 4, state),
+                    LineKind::Comment
+                );
+                python_comment(&close, &mut state);
+                assert_eq!(
+                    line_kind(extension, "# spin", 2, 4, state),
+                    LineKind::Comment
+                );
+                let same = format!("s = {delimiter} # spin {delimiter}");
+                assert_eq!(kind(extension, &same, "spin"), LineKind::Reference);
+            }
+            let mut state = None;
+            python_comment("# \"\"\"\n", &mut state);
+            python_comment("x = '\"\"\"'\n", &mut state);
+            assert_eq!(
+                line_kind(extension, "# spin", 2, 4, state),
+                LineKind::Comment
+            );
+            python_comment("s = \"\"\"\n", &mut state);
+            python_comment("\\\"\"\"\n", &mut state);
+            assert_eq!(
+                line_kind(extension, "# spin", 2, 4, state),
+                LineKind::Reference
+            );
+            python_comment("'''\n", &mut state);
+            assert_eq!(
+                line_kind(extension, "# spin", 2, 4, state),
+                LineKind::Reference
+            );
+        }
+        assert_eq!(
+            line_kind("rb", "# spin", 2, 4, Some(b'"')),
+            LineKind::Comment
+        );
         assert_eq!(kind("go", "// spin", "spin"), LineKind::Comment);
         assert_eq!(kind("go", "x := 1 // spin", "spin"), LineKind::Comment);
         assert_eq!(kind("go", "x := spin // spin", "spin"), LineKind::Reference);
