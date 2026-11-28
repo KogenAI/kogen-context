@@ -133,7 +133,16 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
     if (marker == "#" && has_marker_outside_string(before, marker, true))
         || (marker != "#"
             && (trimmed.starts_with('*')
-                || in_comment(before, marker, extension == "php", extension == "rs")))
+                || in_comment(
+                    before,
+                    marker,
+                    extension == "php",
+                    extension == "rs",
+                    matches!(
+                        extension,
+                        "js" | "mjs" | "cjs" | "jsx" | "ts" | "mts" | "cts" | "tsx"
+                    ),
+                )))
     {
         return LineKind::Comment;
     }
@@ -148,9 +157,9 @@ fn line_kind(extension: &str, line: &str, at: usize, literal_len: usize) -> Line
 
 /// Scan the prefix up to the match, ignoring comment markers in strings and
 /// line-comment markers inside block comments.
-fn in_comment(text: &str, marker: &str, php: bool, rust: bool) -> bool {
+fn in_comment(text: &str, marker: &str, php: bool, rust: bool, template: bool) -> bool {
     let mut chars = text.char_indices().peekable();
-    let mut quoted = false;
+    let mut quote = None;
     let mut escaped = false;
     let mut block = false;
     let mut raw_hashes = None;
@@ -171,13 +180,13 @@ fn in_comment(text: &str, marker: &str, php: bool, rust: bool) -> bool {
                 }
                 raw_hashes = None;
             }
-        } else if quoted {
+        } else if let Some(delimiter) = quote {
             if escaped {
                 escaped = false;
             } else if c == '\\' {
                 escaped = true;
-            } else if c == '"' {
-                quoted = false;
+            } else if c == delimiter {
+                quote = None;
             }
         } else if rust
             && (c == 'r'
@@ -198,8 +207,8 @@ fn in_comment(text: &str, marker: &str, php: bool, rust: bool) -> bool {
                 chars.next();
             }
             raw_hashes = Some(hashes);
-        } else if c == '"' {
-            quoted = true;
+        } else if c == '"' || (template && c == '`') {
+            quote = Some(c);
         } else if rest.starts_with(marker) || (php && c == '#') {
             return true;
         } else if rest.starts_with("/*") {
@@ -517,6 +526,29 @@ mod tests {
             kind("rs", r###"let s = fooxr#"a" // spin"#;"###, "spin"),
             LineKind::Comment
         );
+        for extension in ["js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx"] {
+            for line in [
+                "const s = `a // spin`;",
+                "const s = `a // spin",
+                r"const s = `a \` // spin`;",
+                "const s = `${a // spin}`;",
+            ] {
+                assert_eq!(
+                    kind(extension, line, "spin"),
+                    LineKind::Reference,
+                    "{extension}: {line}"
+                );
+            }
+            assert_eq!(
+                kind(extension, "const s = `//`; // spin", "spin"),
+                LineKind::Comment
+            );
+            assert_eq!(
+                kind(extension, r"const s = `a \\`; // spin", "spin"),
+                LineKind::Comment
+            );
+        }
+        assert_eq!(kind("go", "x := `a // spin`", "spin"), LineKind::Comment);
         assert_eq!(kind("php", "$x = ' # spin", "spin"), LineKind::Comment);
         assert_eq!(kind("lua", "x = ' -- spin", "spin"), LineKind::Comment);
         assert_eq!(
